@@ -1,0 +1,99 @@
+name: Terraform CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+        default: plan
+      tf_args:
+        description: "Extra Terraform arguments passed via TF_ARGS"
+        required: false
+        default: ""
+      existing_bucket:
+        description: "Existing S3 bucket name (optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: ${{ (inputs.action == 'apply' || inputs.action == 'destroy') && 'production' || 'plan' }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+
+      - name: Ensure AWS credentials are configured
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ] && { [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; }; then
+            echo "Set AWS_ROLE_ARN (OIDC) or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY secrets." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ secrets.AWS_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: scfuzzbench-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (keys)
+        if: ${{ secrets.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write backend config from secret
+        if: ${{ secrets.TF_BACKEND_CONFIG != '' }}
+        run: |
+          cat > infrastructure/backend.hcl <<'EOF'
+          ${{ secrets.TF_BACKEND_CONFIG }}
+          EOF
+
+      - name: Ensure backend config exists
+        run: |
+          if [ ! -f infrastructure/backend.hcl ]; then
+            echo "Missing infrastructure/backend.hcl. Create it or set TF_BACKEND_CONFIG secret." >&2
+            exit 1
+          fi
+
+      - name: Terraform init (remote backend)
+        run: make terraform-init-backend BACKEND_CONFIG=backend.hcl
+
+      - name: Terraform ${{ inputs.action }}
+        env:
+          TF_ARGS: ${{ inputs.tf_args }}
+          EXISTING_BUCKET: ${{ inputs.existing_bucket }}
+        run: |
+          case "${{ inputs.action }}" in
+            plan)
+              make terraform-plan
+              ;;
+            apply)
+              make terraform-deploy
+              ;;
+            destroy)
+              make terraform-destroy
+              ;;
+          esac

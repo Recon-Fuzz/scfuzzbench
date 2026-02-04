@@ -45,13 +45,13 @@ All your changes must be implemented in the git worktree.
 
 Worktrees are created with the following naming scheme:
 
-- `.worktrees/issue-ISSUE_ID-SHORT_DESCRIPTION` (make sure to use the `.worktrees/` subdirectory, with a dot, not `worktrees/` without dot)
+- `.worktrees/issue-ISSUE_ID-SHORT_DESCRIPTION`
 - `ISSUE_ID` comes from the GitHub issue number (e.g. `https://github.com/Recon-Fuzz/scfuzzbench/issues/73` -> `73`)
 - `SHORT_DESCRIPTION` is a max 3-word kebab-case summary of the issue (e.g. `fix-lcov`)
 
 If no GitHub issue is provided, use:
 
-- `./worktrees/issue-NA-SHORT_DESCRIPTION` (e.g. `./worktrees/issue-NA-fix-lcov`)
+- `.worktrees/issue-NA-SHORT_DESCRIPTION` (e.g. `.worktrees/issue-NA-fix-lcov`)
 
 When you are done, open a PR from the worktree branch. Then, new requests by the user should always be implemented on the worktree branch, and the corresponding PR updated.
 
