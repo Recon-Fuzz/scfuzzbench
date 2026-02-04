@@ -94,6 +94,19 @@ across runs, set `EXISTING_BUCKET=<bucket-name>` so Terraform uses
 `existing_bucket_name` and only the `<benchmark_uuid>/<run_id>` prefix changes.
 Avoid purging the bucket unless you explicitly want to delete historical runs.
 
+If the state already manages the bucket resources (for example, from an older
+deployment that created the bucket), remove those resources from state before
+switching to `EXISTING_BUCKET`. Otherwise, Terraform will try to delete the
+bucket when the resources disappear from config.
+
+```bash
+AWS_PROFILE=your-profile terraform -chdir=infrastructure state rm \
+  aws_s3_bucket.logs \
+  aws_s3_bucket_public_access_block.logs \
+  aws_s3_bucket_server_side_encryption_configuration.logs \
+  aws_s3_bucket_versioning.logs
+```
+
 If you need to tear down infra but keep the bucket:
 
 ```bash
