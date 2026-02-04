@@ -497,130 +497,6 @@ def write_exclusive_csv(events: Iterable[Event], out_path: Path) -> None:
                 writer.writerow([fuzzer, event])
 
 
-def aggregate_series(times_list: List[List[float]], max_time: float) -> Tuple[List[float], List[float]]:
-    grid = sorted({0.0, max_time, *[t for series in times_list for t in series]})
-    if not grid:
-        return [], []
-    values_by_series: List[List[int]] = []
-    for series in times_list:
-        series_sorted = sorted(series)
-        idx = 0
-        values: List[int] = []
-        for t in grid:
-            while idx < len(series_sorted) and series_sorted[idx] <= t:
-                idx += 1
-            values.append(idx)
-        values_by_series.append(values)
-    median_vals = []
-    for i in range(len(grid)):
-        samples = [values[i] for values in values_by_series]
-        median_vals.append(statistics.median(samples))
-    return grid, median_vals
-
-
-def mean_series(times_list: List[List[float]], max_time: float) -> Tuple[List[float], List[float]]:
-    grid = sorted({0.0, max_time, *[t for series in times_list for t in series]})
-    if not grid:
-        return [], []
-    values_by_series: List[List[int]] = []
-    for series in times_list:
-        series_sorted = sorted(series)
-        idx = 0
-        values: List[int] = []
-        for t in grid:
-            while idx < len(series_sorted) and series_sorted[idx] <= t:
-                idx += 1
-            values.append(idx)
-        values_by_series.append(values)
-    mean_vals = []
-    for i in range(len(grid)):
-        samples = [values[i] for values in values_by_series]
-        mean_vals.append(sum(samples) / len(samples))
-    return grid, mean_vals
-
-
-def plot_events(
-    events: Iterable[Event],
-    out_path: Path,
-    title: str,
-    duration_hours: Optional[float],
-    show_median: bool,
-    show_mean: bool,
-) -> None:
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError as exc:
-        raise SystemExit(
-            "matplotlib is required for plotting. Install with: pip install matplotlib"
-        ) from exc
-
-    runs = build_runs(events)
-    color_map = {
-        "echidna": "#1f77b4",
-        "medusa": "#ff7f0e",
-        "foundry": "#2ca02c",
-        "echidna-symexec": "#9467bd",
-    }
-
-    plt.figure(figsize=(10, 6))
-
-    for fuzzer, run_map in sorted(runs.items()):
-        series_list = list(run_map.values())
-        if not series_list:
-            continue
-        color = color_map.get(fuzzer, None)
-        max_time = max((max(series) if series else 0.0) for series in series_list)
-        if duration_hours is not None:
-            max_time = max(max_time, duration_hours * 3600.0)
-        for series in series_list:
-            if not series:
-                continue
-            times = [0.0] + series
-            counts = list(range(0, len(series) + 1))
-            plt.step(
-                [t / 3600.0 for t in times],
-                counts,
-                where="post",
-                alpha=0.25,
-                color=color,
-                linewidth=1,
-            )
-        if show_median:
-            grid, median_vals = aggregate_series(series_list, max_time)
-            if grid:
-                plt.step(
-                    [t / 3600.0 for t in grid],
-                    median_vals,
-                    where="post",
-                    color=color,
-                    linewidth=2.5,
-                    label=f"{fuzzer} (median)",
-                )
-        if show_mean:
-            grid, mean_vals = mean_series(series_list, max_time)
-            if grid:
-                plt.step(
-                    [t / 3600.0 for t in grid],
-                    mean_vals,
-                    where="post",
-                    color=color,
-                    linestyle="--",
-                    linewidth=2,
-                    label=f"{fuzzer} (mean)",
-                )
-
-    plt.title(title)
-    plt.xlabel("Elapsed time (hours)")
-    plt.ylabel("Broken invariants (cumulative count)")
-    plt.grid(True, alpha=0.2)
-    plt.legend()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(out_path)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze scfuzzbench logs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -630,22 +506,10 @@ def parse_args() -> argparse.Namespace:
     parse_parser.add_argument("--run-id", default=None)
     parse_parser.add_argument("--out-csv", required=True, type=Path)
 
-    plot_parser = subparsers.add_parser("plot", help="Plot from events CSV.")
-    plot_parser.add_argument("--events-csv", required=True, type=Path)
-    plot_parser.add_argument("--out", required=True, type=Path)
-    plot_parser.add_argument("--title", default="Fuzzer performance over time")
-    plot_parser.add_argument("--duration-hours", type=float, default=None)
-    plot_parser.add_argument("--no-median", action="store_false", dest="show_median", default=True)
-    plot_parser.add_argument("--show-mean", action="store_true", default=False)
-
-    run_parser = subparsers.add_parser("run", help="Parse logs and plot.")
+    run_parser = subparsers.add_parser("run", help="Parse logs and write CSVs.")
     run_parser.add_argument("--logs-dir", required=True, type=Path)
     run_parser.add_argument("--run-id", default=None)
     run_parser.add_argument("--out-dir", required=True, type=Path)
-    run_parser.add_argument("--title", default="Fuzzer performance over time")
-    run_parser.add_argument("--duration-hours", type=float, default=None)
-    run_parser.add_argument("--no-median", action="store_false", dest="show_median", default=True)
-    run_parser.add_argument("--show-mean", action="store_true", default=False)
 
     return parser.parse_args()
 
@@ -656,22 +520,10 @@ def main() -> int:
         events = parse_logs(args.logs_dir, args.run_id)
         write_events_csv(events, args.out_csv)
         return 0
-    if args.command == "plot":
-        events = load_events_csv(args.events_csv)
-        plot_events(
-            events,
-            args.out,
-            title=args.title,
-            duration_hours=args.duration_hours,
-            show_median=args.show_median,
-            show_mean=args.show_mean,
-        )
-        return 0
     if args.command == "run":
         out_dir: Path = args.out_dir
         events = parse_logs(args.logs_dir, args.run_id)
         events_csv = out_dir / "events.csv"
-        plot_png = out_dir / "fuzzer_performance.png"
         summary_csv = out_dir / "summary.csv"
         overlap_csv = out_dir / "overlap.csv"
         exclusive_csv = out_dir / "exclusive.csv"
@@ -679,14 +531,6 @@ def main() -> int:
         write_summary_csv(events, summary_csv)
         write_overlap_csv(events, overlap_csv)
         write_exclusive_csv(events, exclusive_csv)
-        plot_events(
-            events,
-            plot_png,
-            title=args.title,
-            duration_hours=args.duration_hours,
-            show_median=args.show_median,
-            show_mean=args.show_mean,
-        )
         return 0
     return 1
 

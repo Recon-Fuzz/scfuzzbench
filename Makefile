@@ -1,5 +1,7 @@
 TF_DIR := infrastructure
 TF_ARGS ?=
+BACKEND_CONFIG ?= backend.hcl
+BACKEND_INIT_FLAGS ?= -migrate-state -force-copy -input=false
 LOGS_DIR ?= logs
 OUT_DIR ?= analysis_out
 ANALYSIS_VENV ?= .venv-analysis
@@ -22,8 +24,11 @@ SHOW_MEAN ?=
 EVENTS_CSV ?= $(ANALYSIS_OUT_DIR)/events.csv
 CUMULATIVE_CSV ?= $(ANALYSIS_OUT_DIR)/cumulative.csv
 REPORT_CSV ?= $(CUMULATIVE_CSV)
-REPORT_OUT_DIR ?= $(ANALYSIS_OUT_DIR)/benchmark_report
-REPORT_BUDGET ?= 24
+REPORT_OUT_DIR ?= $(ANALYSIS_OUT_DIR)
+REPORT_BUDGET ?= $(DURATION_HOURS)
+ifeq ($(strip $(REPORT_BUDGET)),)
+REPORT_BUDGET := 24
+endif
 REPORT_GRID_STEP_MIN ?= 6
 REPORT_CHECKPOINTS ?= 1,4,8,24
 REPORT_KS ?= 1,3,5
@@ -60,18 +65,14 @@ ifneq ($(strip $(EXCLUDE_FUZZERS)),)
 EXCLUDE_ARG := --exclude-fuzzers $(EXCLUDE_FUZZERS)
 endif
 DURATION_ARG :=
-ifneq ($(strip $(DURATION_HOURS)),)
-DURATION_ARG := --duration-hours $(DURATION_HOURS)
-endif
-SHOW_MEAN_ARG :=
-ifneq ($(strip $(SHOW_MEAN)),)
-SHOW_MEAN_ARG := --show-mean
-endif
 
-.PHONY: terraform-init terraform-fmt terraform-validate terraform-plan terraform-deploy terraform-destroy terraform-destroy-infra analysis-venv results-analyze results-download results-prepare results-analyze-filtered results-analyze-all results-inspect s3-purge-versions report-benchmark report-wide-to-long report-events-to-cumulative
+.PHONY: terraform-init terraform-init-backend terraform-fmt terraform-validate terraform-plan terraform-deploy terraform-destroy terraform-destroy-infra analysis-venv results-analyze results-download results-prepare results-analyze-filtered results-analyze-all results-inspect s3-purge-versions report-benchmark report-wide-to-long report-events-to-cumulative
 
 terraform-init:
 	terraform -chdir=$(TF_DIR) init
+
+terraform-init-backend:
+	terraform -chdir=$(TF_DIR) init -backend-config=$(BACKEND_CONFIG) $(BACKEND_INIT_FLAGS)
 
 terraform-fmt:
 	terraform -chdir=$(TF_DIR) fmt -recursive
@@ -105,7 +106,7 @@ results-prepare:
 	python3 scripts/prepare_analysis_logs.py --unzipped-dir $(UNZIPPED_DIR) --out-dir $(ANALYSIS_LOGS_DIR)
 
 results-analyze-filtered: analysis-venv
-	$(ANALYSIS_PY) scripts/run_analysis_filtered.py --logs-dir $(ANALYSIS_LOGS_DIR) --out-dir $(ANALYSIS_OUT_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG) $(DURATION_ARG) $(SHOW_MEAN_ARG)
+	$(ANALYSIS_PY) scripts/run_analysis_filtered.py --logs-dir $(ANALYSIS_LOGS_DIR) --out-dir $(ANALYSIS_OUT_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG)
 
 results-analyze-all: analysis-venv results-download results-prepare results-analyze-filtered report-events-to-cumulative report-benchmark
 

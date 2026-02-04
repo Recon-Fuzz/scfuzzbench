@@ -14,10 +14,6 @@ def main() -> int:
     parser.add_argument("--logs-dir", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--run-id", default=None)
-    parser.add_argument("--duration-hours", type=float, default=None)
-    parser.add_argument("--title", default="Fuzzer performance over time")
-    parser.add_argument("--no-median", action="store_false", dest="show_median", default=True)
-    parser.add_argument("--show-mean", action="store_true", default=False)
     parser.add_argument(
         "--exclude-fuzzers",
         default="",
@@ -39,14 +35,6 @@ def main() -> int:
     analyze.write_summary_csv(events, args.out_dir / "summary.csv")
     analyze.write_overlap_csv(events, args.out_dir / "overlap.csv")
     analyze.write_exclusive_csv(events, args.out_dir / "exclusive.csv")
-    analyze.plot_events(
-        events,
-        args.out_dir / "fuzzer_performance.png",
-        title=args.title,
-        duration_hours=args.duration_hours,
-        show_median=args.show_median,
-        show_mean=args.show_mean,
-    )
     return 0
 
 

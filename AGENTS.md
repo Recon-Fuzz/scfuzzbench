@@ -19,6 +19,7 @@ Instructions for working on Terraform in this repository.
   - `make terraform-fmt`
   - `make terraform-validate`
   - `make terraform-plan`
+  - `make terraform-init-backend` (when using a remote backend)
   - `make terraform-deploy`
   - `make terraform-destroy`
 

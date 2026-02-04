@@ -45,6 +45,9 @@ infrastructure/keys/*.pem
 # Local environment secrets
 .env
 
+# Terraform backend config (local)
+infrastructure/backend.hcl
+
 # Python artifacts
 __pycache__/
 *.pyc
