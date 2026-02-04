@@ -19,6 +19,7 @@ MEDUSA_ELAPSED_RE = re.compile(r"elapsed:\s*([0-9hms]+)")
 FOUNDATION_JSON_RE = re.compile(r"^\s*\{.*\}\s*$")
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 FALSIFIED_RE = re.compile(r"Test\s+([^\s]+)\s+falsified!")
+ECHIDNA_FAILED_RE = re.compile(r"^([A-Za-z0-9_]+)\(\):\s+failed!")
 
 
 @dataclass(frozen=True)
@@ -226,7 +227,14 @@ def parse_medusa_log(
 
 
 def parse_generic_log(
-    path: Path, run_id: str, instance_id: str, fuzzer_label: str
+    path: Path,
+    run_id: str,
+    instance_id: str,
+    fuzzer_label: str,
+    *,
+    allow_bang: bool = True,
+    allow_falsified: bool = True,
+    allow_failed: bool = False,
 ) -> List[Event]:
     events: List[Event] = []
     seen = set()
@@ -240,47 +248,71 @@ def parse_generic_log(
                 last_ts = ts
                 if first_ts is None:
                     first_ts = ts
-            bang_event = extract_bang_event(clean_line)
-            if bang_event:
-                if bang_event in seen:
-                    continue
-                if last_ts is None or first_ts is None:
-                    continue
-                seen.add(bang_event)
-                events.append(
-                    Event(
-                        run_id=run_id,
-                        instance_id=instance_id,
-                        fuzzer=normalize_fuzzer(fuzzer_label),
-                        fuzzer_label=fuzzer_label,
-                        event=bang_event,
-                        elapsed_seconds=last_ts - first_ts,
-                        source="bang",
-                        log_path=str(path),
+            if allow_bang:
+                bang_event = extract_bang_event(clean_line)
+                if bang_event:
+                    if bang_event in seen:
+                        continue
+                    if last_ts is None or first_ts is None:
+                        continue
+                    seen.add(bang_event)
+                    events.append(
+                        Event(
+                            run_id=run_id,
+                            instance_id=instance_id,
+                            fuzzer=normalize_fuzzer(fuzzer_label),
+                            fuzzer_label=fuzzer_label,
+                            event=bang_event,
+                            elapsed_seconds=last_ts - first_ts,
+                            source="bang",
+                            log_path=str(path),
+                        )
                     )
-                )
-                continue
-            falsified_match = FALSIFIED_RE.search(clean_line)
-            if falsified_match:
-                event_name = falsified_match.group(1)
-                if event_name in seen:
                     continue
-                if last_ts is None or first_ts is None:
-                    continue
-                seen.add(event_name)
-                events.append(
-                    Event(
-                        run_id=run_id,
-                        instance_id=instance_id,
-                        fuzzer=normalize_fuzzer(fuzzer_label),
-                        fuzzer_label=fuzzer_label,
-                        event=event_name,
-                        elapsed_seconds=last_ts - first_ts,
-                        source="falsified",
-                        log_path=str(path),
+            if allow_failed:
+                failed_match = ECHIDNA_FAILED_RE.search(clean_line)
+                if failed_match:
+                    event_name = failed_match.group(1)
+                    if event_name in seen:
+                        continue
+                    if last_ts is None or first_ts is None:
+                        continue
+                    seen.add(event_name)
+                    events.append(
+                        Event(
+                            run_id=run_id,
+                            instance_id=instance_id,
+                            fuzzer=normalize_fuzzer(fuzzer_label),
+                            fuzzer_label=fuzzer_label,
+                            event=event_name,
+                            elapsed_seconds=last_ts - first_ts,
+                            source="failed",
+                            log_path=str(path),
+                        )
                     )
-                )
-                continue
+                    continue
+            if allow_falsified:
+                falsified_match = FALSIFIED_RE.search(clean_line)
+                if falsified_match:
+                    event_name = falsified_match.group(1)
+                    if event_name in seen:
+                        continue
+                    if last_ts is None or first_ts is None:
+                        continue
+                    seen.add(event_name)
+                    events.append(
+                        Event(
+                            run_id=run_id,
+                            instance_id=instance_id,
+                            fuzzer=normalize_fuzzer(fuzzer_label),
+                            fuzzer_label=fuzzer_label,
+                            event=event_name,
+                            elapsed_seconds=last_ts - first_ts,
+                            source="falsified",
+                            log_path=str(path),
+                        )
+                    )
+                    continue
             if "panic: assertion failed" in clean_line or "FAILURE" in clean_line:
                 if last_ts is None or first_ts is None:
                     continue
@@ -321,6 +353,18 @@ def parse_logs(logs_dir: Path, run_id: Optional[str]) -> List[Event]:
             events.extend(parse_foundry_log(path, run_id_value, instance_id, fuzzer_label))
         elif fuzzer == "medusa":
             events.extend(parse_medusa_log(path, run_id_value, instance_id, fuzzer_label))
+        elif fuzzer in ("echidna", "echidna-symexec"):
+            events.extend(
+                parse_generic_log(
+                    path,
+                    run_id_value,
+                    instance_id,
+                    fuzzer_label,
+                    allow_bang=False,
+                    allow_falsified=False,
+                    allow_failed=True,
+                )
+            )
         else:
             events.extend(parse_generic_log(path, run_id_value, instance_id, fuzzer_label))
     return events
