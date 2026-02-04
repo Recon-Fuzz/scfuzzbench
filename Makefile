@@ -1,0 +1,125 @@
+TF_DIR := infrastructure
+TF_ARGS ?=
+LOGS_DIR ?= logs
+OUT_DIR ?= analysis_out
+ANALYSIS_VENV ?= .venv-analysis
+ANALYSIS_PY ?= $(ANALYSIS_VENV)/bin/python
+ANALYSIS_PIP ?= $(ANALYSIS_VENV)/bin/pip
+ANALYSIS_REQ ?= analysis/requirements.txt
+RUN_ID ?=
+AWS_PROFILE ?=
+BUCKET ?=
+BENCHMARK_UUID ?=
+EXISTING_BUCKET ?=
+DEST ?= /tmp/scfuzzbench-results-$(RUN_ID)
+ARTIFACT_CATEGORY ?= logs
+UNZIPPED_DIR ?= $(DEST)/logs/unzipped
+ANALYSIS_LOGS_DIR ?= $(DEST)/analysis-logs
+ANALYSIS_OUT_DIR ?= $(DEST)/analysis
+EXCLUDE_FUZZERS ?=
+DURATION_HOURS ?=
+SHOW_MEAN ?=
+EVENTS_CSV ?= $(ANALYSIS_OUT_DIR)/events.csv
+CUMULATIVE_CSV ?= $(ANALYSIS_OUT_DIR)/cumulative.csv
+REPORT_CSV ?= $(CUMULATIVE_CSV)
+REPORT_OUT_DIR ?= $(ANALYSIS_OUT_DIR)/benchmark_report
+REPORT_BUDGET ?= 24
+REPORT_GRID_STEP_MIN ?= 6
+REPORT_CHECKPOINTS ?= 1,4,8,24
+REPORT_KS ?= 1,3,5
+WIDE_CSV ?=
+LONG_CSV ?= results_long.csv
+RUN_ID_ARG :=
+ifneq ($(strip $(RUN_ID)),)
+RUN_ID_ARG := --run-id $(RUN_ID)
+endif
+BENCHMARK_UUID_ARG :=
+ifneq ($(strip $(BENCHMARK_UUID)),)
+BENCHMARK_UUID_ARG := --benchmark-uuid $(BENCHMARK_UUID)
+endif
+SCFUZZBENCH_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+SCFUZZBENCH_COMMIT_ARG :=
+ifneq ($(strip $(SCFUZZBENCH_COMMIT)),)
+SCFUZZBENCH_COMMIT_ARG := -var 'scfuzzbench_commit=$(SCFUZZBENCH_COMMIT)'
+endif
+EXISTING_BUCKET_ARG :=
+ifneq ($(strip $(EXISTING_BUCKET)),)
+EXISTING_BUCKET_ARG := -var 'existing_bucket_name=$(EXISTING_BUCKET)'
+endif
+PROFILE_ARG :=
+ifneq ($(strip $(AWS_PROFILE)),)
+PROFILE_ARG := --profile $(AWS_PROFILE)
+endif
+NO_UNZIP ?=
+NO_UNZIP_ARG :=
+ifneq ($(strip $(NO_UNZIP)),)
+NO_UNZIP_ARG := --no-unzip
+endif
+EXCLUDE_ARG :=
+ifneq ($(strip $(EXCLUDE_FUZZERS)),)
+EXCLUDE_ARG := --exclude-fuzzers $(EXCLUDE_FUZZERS)
+endif
+DURATION_ARG :=
+ifneq ($(strip $(DURATION_HOURS)),)
+DURATION_ARG := --duration-hours $(DURATION_HOURS)
+endif
+SHOW_MEAN_ARG :=
+ifneq ($(strip $(SHOW_MEAN)),)
+SHOW_MEAN_ARG := --show-mean
+endif
+
+.PHONY: terraform-init terraform-fmt terraform-validate terraform-plan terraform-deploy terraform-destroy terraform-destroy-infra analysis-venv results-analyze results-download results-prepare results-analyze-filtered results-analyze-all results-inspect s3-purge-versions report-benchmark report-wide-to-long report-events-to-cumulative
+
+terraform-init:
+	terraform -chdir=$(TF_DIR) init
+
+terraform-fmt:
+	terraform -chdir=$(TF_DIR) fmt -recursive
+
+terraform-validate:
+	terraform -chdir=$(TF_DIR) validate
+
+terraform-plan:
+	terraform -chdir=$(TF_DIR) plan $(TF_ARGS) $(SCFUZZBENCH_COMMIT_ARG) $(EXISTING_BUCKET_ARG)
+
+terraform-deploy:
+	terraform -chdir=$(TF_DIR) apply $(TF_ARGS) $(SCFUZZBENCH_COMMIT_ARG) $(EXISTING_BUCKET_ARG)
+
+terraform-destroy:
+	terraform -chdir=$(TF_DIR) destroy $(TF_ARGS) $(SCFUZZBENCH_COMMIT_ARG) $(EXISTING_BUCKET_ARG)
+
+terraform-destroy-infra:
+	terraform -chdir=$(TF_DIR) destroy $(TF_ARGS) -target=aws_instance.fuzzer -target=aws_iam_instance_profile.fuzzer -target=aws_iam_role_policy.s3_access -target=aws_iam_role.fuzzer -target=aws_key_pair.ssh -target=local_sensitive_file.ssh_private_key -target=tls_private_key.ssh -target=aws_security_group.ssh -target=aws_route_table_association.public -target=aws_route_table.public -target=aws_subnet.public -target=aws_internet_gateway.main -target=aws_vpc.main $(SCFUZZBENCH_COMMIT_ARG) $(EXISTING_BUCKET_ARG)
+
+analysis-venv:
+	python3 -m venv $(ANALYSIS_VENV)
+	$(ANALYSIS_PIP) install -r $(ANALYSIS_REQ)
+
+results-analyze: analysis-venv
+	$(ANALYSIS_PY) analysis/analyze.py run --logs-dir $(LOGS_DIR) --out-dir $(OUT_DIR) $(RUN_ID_ARG)
+
+results-download:
+	python3 scripts/download_run_artifacts.py --bucket $(BUCKET) --run-id $(RUN_ID) $(BENCHMARK_UUID_ARG) --dest $(DEST) --category $(ARTIFACT_CATEGORY) $(PROFILE_ARG) $(NO_UNZIP_ARG)
+
+results-prepare:
+	python3 scripts/prepare_analysis_logs.py --unzipped-dir $(UNZIPPED_DIR) --out-dir $(ANALYSIS_LOGS_DIR)
+
+results-analyze-filtered: analysis-venv
+	$(ANALYSIS_PY) scripts/run_analysis_filtered.py --logs-dir $(ANALYSIS_LOGS_DIR) --out-dir $(ANALYSIS_OUT_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG) $(DURATION_ARG) $(SHOW_MEAN_ARG)
+
+results-analyze-all: analysis-venv results-download results-prepare results-analyze-filtered report-events-to-cumulative report-benchmark
+
+results-inspect:
+	python3 scripts/inspect_logs.py --logs-dir $(ANALYSIS_LOGS_DIR)
+
+s3-purge-versions:
+	python3 scripts/purge_s3_versions.py --bucket $(BUCKET) $(PROFILE_ARG)
+
+report-benchmark: analysis-venv
+	$(ANALYSIS_PY) analysis/benchmark_report.py --csv $(REPORT_CSV) --outdir $(REPORT_OUT_DIR) --budget $(REPORT_BUDGET) --grid_step_min $(REPORT_GRID_STEP_MIN) --checkpoints $(REPORT_CHECKPOINTS) --ks $(REPORT_KS)
+
+report-wide-to-long: analysis-venv
+	$(ANALYSIS_PY) analysis/wide_to_long.py --wide_csv $(WIDE_CSV) --out_csv $(LONG_CSV)
+
+report-events-to-cumulative: analysis-venv
+	$(ANALYSIS_PY) analysis/events_to_cumulative.py --events-csv $(EVENTS_CSV) --out-csv $(CUMULATIVE_CSV)

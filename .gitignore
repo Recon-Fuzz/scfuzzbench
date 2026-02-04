@@ -35,3 +35,17 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Scfuzzbench-generated SSH keys
+infrastructure/keys/*.pem
+
+# Private directories (local only)
+**/private/**
+
+# Local environment secrets
+.env
+
+# Python artifacts
+__pycache__/
+*.pyc
+.venv-analysis/

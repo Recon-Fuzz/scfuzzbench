@@ -1,0 +1,58 @@
+#!/bin/bash
+set -euo pipefail
+
+exec > >(tee /var/log/scfuzzbench-user-data.log | logger -t scfuzzbench-user-data -s 2>/dev/console) 2>&1
+
+if [[ -f /opt/scfuzzbench/.bootstrapped ]]; then
+  exit 0
+fi
+
+systemctl enable --now ssh || systemctl enable --now sshd || true
+
+mkdir -p /opt/scfuzzbench/fuzzers/${fuzzer_key}
+
+cat <<'SHARED' >/opt/scfuzzbench/common.sh
+${shared_sh}
+SHARED
+
+cat <<'INSTALL' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
+${install_sh}
+INSTALL
+
+cat <<'RUN' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+${run_sh}
+RUN
+
+chmod +x /opt/scfuzzbench/common.sh \
+  /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh \
+  /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+
+source /opt/scfuzzbench/common.sh
+install_shutdown_script
+trap 'shutdown_instance' EXIT
+
+export AWS_REGION="${aws_region}"
+export AWS_DEFAULT_REGION="${aws_region}"
+export SCFUZZBENCH_S3_BUCKET="${s3_bucket}"
+export SCFUZZBENCH_RUN_ID="${run_id}"
+export SCFUZZBENCH_BENCHMARK_UUID="${benchmark_uuid}"
+export SCFUZZBENCH_BENCHMARK_MANIFEST_B64="${benchmark_manifest_b64}"
+export SCFUZZBENCH_TIMEOUT_SECONDS="${timeout_seconds}"
+export SCFUZZBENCH_REPO_URL="${repo_url}"
+export SCFUZZBENCH_COMMIT="${repo_commit}"
+export SCFUZZBENCH_BENCHMARK_TYPE="${benchmark_type}"
+export FOUNDRY_VERSION="${foundry_version}"
+export FOUNDRY_GIT_REPO="${foundry_git_repo}"
+export FOUNDRY_GIT_REF="${foundry_git_ref}"
+export ECHIDNA_VERSION="${echidna_version}"
+export MEDUSA_VERSION="${medusa_version}"
+export BITWUZLA_VERSION="${bitwuzla_version}"
+export SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER="${git_token_ssm_parameter_name}"
+%{ for key, value in fuzzer_env ~}
+export ${key}="${value}"
+%{ endfor ~}
+
+bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
+bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh || true
+
+touch /opt/scfuzzbench/.bootstrapped
