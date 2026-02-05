@@ -173,5 +173,6 @@ variable "fuzzer_env" {
   default = {
     ECHIDNA_CONFIG = "echidna.yaml"
     ECHIDNA_TARGET = "tests/recon/CryticTester.sol"
+    ECHIDNA_CONTRACT = "CryticTester"
   }
 }
