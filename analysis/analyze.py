@@ -19,7 +19,7 @@ MEDUSA_ELAPSED_RE = re.compile(r"elapsed:\s*([0-9hms]+)")
 FOUNDATION_JSON_RE = re.compile(r"^\s*\{.*\}\s*$")
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 FALSIFIED_RE = re.compile(r"Test\s+([^\s]+)\s+falsified!")
-ECHIDNA_FAILED_RE = re.compile(r"^([A-Za-z0-9_]+)\(\):\s+failed!")
+ECHIDNA_FAILED_RE = re.compile(r"^([A-Za-z0-9_]+)\([^)]*\):\s+failed!")
 
 
 @dataclass(frozen=True)
