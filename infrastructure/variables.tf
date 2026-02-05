@@ -170,5 +170,8 @@ variable "custom_fuzzer_definitions" {
 variable "fuzzer_env" {
   type        = map(string)
   description = "Extra environment variables passed to fuzzer run scripts."
-  default     = {}
+  default = {
+    ECHIDNA_CONFIG = "echidna.yaml"
+    ECHIDNA_TARGET = "tests/recon/CryticTester.sol"
+  }
 }
