@@ -401,7 +401,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--outdir", type=Path, required=True)
-    parser.add_argument("--budget", type=float, default=24.0)
+    parser.add_argument("--budget", type=float, default=None)
     parser.add_argument("--grid_step_min", type=float, default=6.0)
     parser.add_argument("--checkpoints", type=str, default="1,4,8,24")
     parser.add_argument("--ks", type=str, default="1,3,5")
@@ -410,8 +410,15 @@ def main() -> int:
     df = load_csv(args.csv)
     validate_monotonic(df)
 
-    budget = float(args.budget)
+    if args.budget is None:
+        budget = float(df["time_hours"].max())
+    else:
+        budget = float(args.budget)
     checkpoints = [float(x) for x in args.checkpoints.split(",") if x.strip()]
+    if args.budget is None:
+        checkpoints = [t for t in checkpoints if t <= budget + 1e-9]
+        if not checkpoints:
+            checkpoints = [budget]
     ks = [int(x) for x in args.ks.split(",") if x.strip()]
 
     step_h = float(args.grid_step_min) / 60.0
