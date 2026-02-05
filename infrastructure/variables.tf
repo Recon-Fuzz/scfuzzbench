@@ -143,6 +143,12 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
+variable "bucket_public_read" {
+  type        = bool
+  description = "Allow public read access to all objects in the logs bucket."
+  default     = true
+}
+
 variable "run_id" {
   type        = string
   description = "Run identifier (defaults to unix timestamp at apply time)."
