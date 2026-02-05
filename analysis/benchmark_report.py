@@ -198,9 +198,12 @@ def compute_metrics(
     return metrics
 
 
-def plot_bugs_over_time(df_grid: pd.DataFrame, outpath: Path) -> None:
+def plot_bugs_over_time(
+    df_grid: pd.DataFrame, outpath: Path, label_map: dict[str, str] | None
+) -> None:
     plt.figure(figsize=(9, 5))
     for fuzzer, group in df_grid.groupby("fuzzer", sort=False):
+        label = label_map.get(str(fuzzer), str(fuzzer)) if label_map else str(fuzzer)
         pivot = (
             group.pivot_table(
                 index="time_hours", columns="run_id", values="bugs_found", aggfunc="max"
@@ -215,7 +218,7 @@ def plot_bugs_over_time(df_grid: pd.DataFrame, outpath: Path) -> None:
         p75 = np.percentile(arr, 75, axis=1)
 
         plt.fill_between(time, p25, p75, step="post", alpha=0.15)
-        plt.step(time, np.rint(p50), where="post", linewidth=2.5, label=f"{fuzzer} (median)")
+        plt.step(time, np.rint(p50), where="post", linewidth=2.5, label=f"{label} (median)")
 
     plt.title("Bugs found over time (median + IQR)")
     plt.xlabel("Elapsed time (hours)")
@@ -227,9 +230,14 @@ def plot_bugs_over_time(df_grid: pd.DataFrame, outpath: Path) -> None:
     plt.close()
 
 
-def plot_time_to_k(metrics: List[FuzzerMetrics], ks: List[int], outpath: Path) -> None:
+def plot_time_to_k(
+    metrics: List[FuzzerMetrics],
+    ks: List[int],
+    outpath: Path,
+    label_map: dict[str, str] | None,
+) -> None:
     plt.figure(figsize=(9, 5))
-    fuzzers = [m.fuzzer for m in metrics]
+    fuzzers = [label_map.get(m.fuzzer, m.fuzzer) if label_map else m.fuzzer for m in metrics]
     x = np.arange(len(fuzzers))
     width = 0.8 / max(1, len(ks))
 
@@ -249,7 +257,9 @@ def plot_time_to_k(metrics: List[FuzzerMetrics], ks: List[int], outpath: Path) -
     plt.close()
 
 
-def plot_final_distribution(df_grid: pd.DataFrame, outpath: Path) -> None:
+def plot_final_distribution(
+    df_grid: pd.DataFrame, outpath: Path, label_map: dict[str, str] | None
+) -> None:
     plt.figure(figsize=(9, 5))
     data = []
     labels = []
@@ -262,7 +272,7 @@ def plot_final_distribution(df_grid: pd.DataFrame, outpath: Path) -> None:
             .astype(float)
         )
         data.append(pivot.iloc[-1].to_numpy(dtype=float))
-        labels.append(str(fuzzer))
+        labels.append(label_map.get(str(fuzzer), str(fuzzer)) if label_map else str(fuzzer))
 
     plt.boxplot(data, labels=labels, showfliers=False)
     plt.ylabel("Bugs found at end of budget")
@@ -272,9 +282,11 @@ def plot_final_distribution(df_grid: pd.DataFrame, outpath: Path) -> None:
     plt.close()
 
 
-def plot_plateau_and_late_share(metrics: List[FuzzerMetrics], outpath: Path) -> None:
+def plot_plateau_and_late_share(
+    metrics: List[FuzzerMetrics], outpath: Path, label_map: dict[str, str] | None
+) -> None:
     plt.figure(figsize=(9, 5))
-    fuzzers = [m.fuzzer for m in metrics]
+    fuzzers = [label_map.get(m.fuzzer, m.fuzzer) if label_map else m.fuzzer for m in metrics]
     plateau = [m.plateau_time for m in metrics]
     late = [m.late_share for m in metrics]
 
@@ -405,6 +417,7 @@ def main() -> int:
     parser.add_argument("--grid_step_min", type=float, default=6.0)
     parser.add_argument("--checkpoints", type=str, default="1,4,8,24")
     parser.add_argument("--ks", type=str, default="1,3,5")
+    parser.add_argument("--anonymize", action="store_true", help="Use generic fuzzer labels in plots.")
     args = parser.parse_args()
 
     df = load_csv(args.csv)
@@ -434,10 +447,15 @@ def main() -> int:
     metrics = compute_metrics(df_grid, budget=budget, checkpoints=checkpoints, ks=ks)
     metrics = sorted(metrics, key=lambda m: (m.final_p50, m.auc_norm), reverse=True)
 
-    plot_bugs_over_time(df_grid, outdir / "bugs_over_time.png")
-    plot_time_to_k(metrics, ks=ks, outpath=outdir / "time_to_k.png")
-    plot_final_distribution(df_grid, outdir / "final_distribution.png")
-    plot_plateau_and_late_share(metrics, outdir / "plateau_and_late_share.png")
+    label_map = None
+    if args.anonymize:
+        fuzzers = sorted({str(f) for f in df_grid["fuzzer"].unique()})
+        label_map = {fz: f"Fuzzer {chr(65 + idx)}" for idx, fz in enumerate(fuzzers)}
+
+    plot_bugs_over_time(df_grid, outdir / "bugs_over_time.png", label_map)
+    plot_time_to_k(metrics, ks=ks, outpath=outdir / "time_to_k.png", label_map=label_map)
+    plot_final_distribution(df_grid, outdir / "final_distribution.png", label_map)
+    plot_plateau_and_late_share(metrics, outdir / "plateau_and_late_share.png", label_map)
     write_report(metrics, budget=budget, checkpoints=checkpoints, ks=ks, outpath=outdir / "REPORT.md")
 
     print(f"wrote: {outdir / 'REPORT.md'}")

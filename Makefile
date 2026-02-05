@@ -32,6 +32,7 @@ endif
 REPORT_GRID_STEP_MIN ?= 6
 REPORT_CHECKPOINTS ?= 1,4,8,24
 REPORT_KS ?= 1,3,5
+REPORT_ANONYMIZE ?=
 WIDE_CSV ?=
 LONG_CSV ?= results_long.csv
 RUN_ID_ARG :=
@@ -117,7 +118,7 @@ s3-purge-versions:
 	python3 scripts/purge_s3_versions.py --bucket $(BUCKET) $(PROFILE_ARG)
 
 report-benchmark: analysis-venv
-	$(ANALYSIS_PY) analysis/benchmark_report.py --csv $(REPORT_CSV) --outdir $(REPORT_OUT_DIR) --budget $(REPORT_BUDGET) --grid_step_min $(REPORT_GRID_STEP_MIN) --checkpoints $(REPORT_CHECKPOINTS) --ks $(REPORT_KS)
+	$(ANALYSIS_PY) analysis/benchmark_report.py --csv $(REPORT_CSV) --outdir $(REPORT_OUT_DIR) --budget $(REPORT_BUDGET) --grid_step_min $(REPORT_GRID_STEP_MIN) --checkpoints $(REPORT_CHECKPOINTS) --ks $(REPORT_KS) $(if $(REPORT_ANONYMIZE),--anonymize,)
 
 report-wide-to-long: analysis-venv
 	$(ANALYSIS_PY) analysis/wide_to_long.py --wide_csv $(WIDE_CSV) --out_csv $(LONG_CSV)

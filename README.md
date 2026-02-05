@@ -142,6 +142,28 @@ make results-download BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<ben
 
 You can read `benchmark_uuid` (and `run_id`) from `terraform output`.
 
+## GitHub Actions
+
+Two workflows publish runs and releases directly from CI/CD:
+
+- `Benchmark Run` (`.github/workflows/benchmark-run.yml`)
+  - Dispatch with inputs for repo/commit, benchmark type, instance type/count, and timeout hours.
+  - Uses existing bucket from `SCFUZZBENCH_BUCKET` and region from `AWS_REGION`.
+  - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
+    `TF_BACKEND_CONFIG` (for remote state).
+  - The run ID is auto-generated at dispatch time.
+
+- `Benchmark Release` (`.github/workflows/benchmark-release.yml`)
+  - Dispatch manually with `benchmark_uuid` + `run_id`, or let the hourly schedule pick up completed runs.
+  - A run is considered complete once `run_id + timeout_hours + 1 hour` has elapsed.
+  - Publishes a GitHub release tagged `scfuzzbench-<benchmark_uuid>-<run_id>`.
+  - Release notes are based on `REPORT.md` with an appended artifacts section.
+  - Analysis artifacts (REPORT + charts + bundles) are uploaded to:
+    `s3://<bucket>/analysis/<benchmark_uuid>/<run_id>/`.
+
+The logs bucket is configured for public read so the release can link directly to S3-hosted charts
+and zip bundles.
+
 ## CSV report
 
 ```bash

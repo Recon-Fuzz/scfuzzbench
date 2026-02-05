@@ -1,0 +1,218 @@
+name: Benchmark Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo_url:
+        description: "Target repository URL."
+        required: true
+      target_commit:
+        description: "Target repository commit hash."
+        required: true
+      benchmark_type:
+        description: "Benchmark type."
+        required: true
+        type: choice
+        options:
+          - property
+          - optimization
+        default: property
+      instance_type:
+        description: "EC2 instance type."
+        required: true
+        default: c6a.8xlarge
+      instances_per_fuzzer:
+        description: "Number of instances per fuzzer."
+        required: true
+        type: number
+        default: 10
+      timeout_hours:
+        description: "Timeout per fuzzer run (hours)."
+        required: true
+        type: number
+        default: 24
+      foundry_version:
+        description: "Override Foundry version (optional)."
+        required: false
+        default: ""
+      foundry_git_repo:
+        description: "Optional Foundry git repo (build from source)."
+        required: false
+        default: ""
+      foundry_git_ref:
+        description: "Optional Foundry git ref (branch/tag/commit)."
+        required: false
+        default: ""
+      echidna_version:
+        description: "Override Echidna version (optional)."
+        required: false
+        default: ""
+      medusa_version:
+        description: "Override Medusa version (optional)."
+        required: false
+        default: ""
+      bitwuzla_version:
+        description: "Override Bitwuzla version (optional)."
+        required: false
+        default: ""
+      git_token_ssm_parameter_name:
+        description: "SSM parameter name for Git token (optional)."
+        required: false
+        default: ""
+      properties_path:
+        description: "Repo-relative properties path for benchmark mode switching (optional)."
+        required: false
+        default: ""
+      fuzzer_env_json:
+        description: "JSON map of extra fuzzer env vars (optional)."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark-run:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+
+      - name: Ensure AWS credentials are configured
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets." >&2
+            exit 1
+          fi
+          if [ -z "${AWS_REGION}" ]; then
+            echo "Set AWS_REGION secret." >&2
+            exit 1
+          fi
+          if [ -z "${SCFUZZBENCH_BUCKET}" ]; then
+            echo "Set SCFUZZBENCH_BUCKET secret." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write backend config from secret
+        if: ${{ secrets.TF_BACKEND_CONFIG != '' }}
+        run: |
+          cat > infrastructure/backend.hcl <<'EOF'
+          ${{ secrets.TF_BACKEND_CONFIG }}
+          EOF
+
+      - name: Ensure backend config exists
+        run: |
+          if [ ! -f infrastructure/backend.hcl ]; then
+            echo "Missing infrastructure/backend.hcl. Create it or set TF_BACKEND_CONFIG secret." >&2
+            exit 1
+          fi
+
+      - name: Terraform init (remote backend)
+        run: make terraform-init-backend BACKEND_CONFIG=backend.hcl
+
+      - name: Terraform apply
+        id: apply
+        env:
+          FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
+          PROPERTIES_PATH: ${{ inputs.properties_path }}
+        run: |
+          set -euo pipefail
+          run_id=$(date +%s)
+          tf_args=(
+            -var "aws_region=${AWS_REGION}"
+            -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
+            -var "target_repo_url=${{ inputs.target_repo_url }}"
+            -var "target_commit=${{ inputs.target_commit }}"
+            -var "benchmark_type=${{ inputs.benchmark_type }}"
+            -var "instance_type=${{ inputs.instance_type }}"
+            -var "instances_per_fuzzer=${{ inputs.instances_per_fuzzer }}"
+            -var "timeout_hours=${{ inputs.timeout_hours }}"
+            -var "run_id=${run_id}"
+            -var "scfuzzbench_commit=${{ github.sha }}"
+          )
+
+          if [[ -n "${{ inputs.foundry_version }}" ]]; then
+            tf_args+=(-var "foundry_version=${{ inputs.foundry_version }}")
+          fi
+          if [[ -n "${{ inputs.foundry_git_repo }}" ]]; then
+            tf_args+=(-var "foundry_git_repo=${{ inputs.foundry_git_repo }}")
+          fi
+          if [[ -n "${{ inputs.foundry_git_ref }}" ]]; then
+            tf_args+=(-var "foundry_git_ref=${{ inputs.foundry_git_ref }}")
+          fi
+          if [[ -n "${{ inputs.echidna_version }}" ]]; then
+            tf_args+=(-var "echidna_version=${{ inputs.echidna_version }}")
+          fi
+          if [[ -n "${{ inputs.medusa_version }}" ]]; then
+            tf_args+=(-var "medusa_version=${{ inputs.medusa_version }}")
+          fi
+          if [[ -n "${{ inputs.bitwuzla_version }}" ]]; then
+            tf_args+=(-var "bitwuzla_version=${{ inputs.bitwuzla_version }}")
+          fi
+          if [[ -n "${{ inputs.git_token_ssm_parameter_name }}" ]]; then
+            tf_args+=(-var "git_token_ssm_parameter_name=${{ inputs.git_token_ssm_parameter_name }}")
+          fi
+
+          if [[ -n "${FUZZER_ENV_JSON}" || -n "${PROPERTIES_PATH}" ]]; then
+            merged=$(python3 - <<'PY'
+import json
+import os
+
+data = {}
+raw = os.environ.get("FUZZER_ENV_JSON", "").strip()
+if raw:
+    data.update(json.loads(raw))
+prop = os.environ.get("PROPERTIES_PATH", "").strip()
+if prop:
+    data["SCFUZZBENCH_PROPERTIES_PATH"] = prop
+print(json.dumps(data))
+PY
+            )
+            tf_args+=(-var "fuzzer_env=${merged}")
+          fi
+
+          terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}"
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect Terraform outputs
+        id: tf_outputs
+        run: |
+          terraform -chdir=infrastructure output -json > run_metadata.json
+          bucket=$(jq -r '.bucket_name.value' run_metadata.json)
+          run_id=$(jq -r '.run_id.value' run_metadata.json)
+          benchmark_uuid=$(jq -r '.benchmark_uuid.value' run_metadata.json)
+          echo "bucket_name=${bucket}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "benchmark_uuid=${benchmark_uuid}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload run metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-metadata
+          path: run_metadata.json
+
+      - name: Summary
+        run: |
+          {
+            echo "Benchmark run started."
+            echo ""
+            echo "- Bucket: ${{ steps.tf_outputs.outputs.bucket_name }}"
+            echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
+            echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
+          } >> "${GITHUB_STEP_SUMMARY}"

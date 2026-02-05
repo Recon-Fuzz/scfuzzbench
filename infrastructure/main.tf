@@ -162,13 +162,33 @@ resource "aws_s3_bucket" "logs" {
 }
 
 resource "aws_s3_bucket_public_access_block" "logs" {
-  count = length(aws_s3_bucket.logs)
+  count = local.bucket_name != "" ? 1 : 0
 
-  bucket                  = aws_s3_bucket.logs[count.index].id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+  bucket                  = local.bucket_name
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+data "aws_iam_policy_document" "logs_public_read" {
+  statement {
+    sid     = "PublicReadGetObject"
+    actions = ["s3:GetObject"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    resources = ["arn:aws:s3:::${local.bucket_name}/*"]
+  }
+}
+
+resource "aws_s3_bucket_policy" "logs_public_read" {
+  count  = local.bucket_name != "" ? 1 : 0
+  bucket = local.bucket_name
+  policy = data.aws_iam_policy_document.logs_public_read.json
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
