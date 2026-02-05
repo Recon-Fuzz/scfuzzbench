@@ -26,7 +26,7 @@ fi
 export SCFUZZBENCH_CORPUS_DIR="${corpus_dir}"
 mkdir -p "${SCFUZZBENCH_CORPUS_DIR}"
 
-cmd=(medusa fuzz)
+cmd=(medusa fuzz --no-color)
 if [[ -n "${MEDUSA_CONFIG:-}" ]]; then
   cmd+=(--config "${MEDUSA_CONFIG}")
 fi
