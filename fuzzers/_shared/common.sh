@@ -9,6 +9,8 @@ SCFUZZBENCH_BENCHMARK_TYPE=${SCFUZZBENCH_BENCHMARK_TYPE:-property}
 SCFUZZBENCH_BENCHMARK_UUID=${SCFUZZBENCH_BENCHMARK_UUID:-}
 SCFUZZBENCH_BENCHMARK_MANIFEST_B64=${SCFUZZBENCH_BENCHMARK_MANIFEST_B64:-}
 SCFUZZBENCH_PROPERTIES_PATH=${SCFUZZBENCH_PROPERTIES_PATH:-}
+SCFUZZBENCH_RUNNER_METRICS=${SCFUZZBENCH_RUNNER_METRICS:-1}
+SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS=${SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS:-5}
 
 log() {
   echo "[$(date -Is)] $*"
@@ -58,9 +60,149 @@ shutdown_instance() {
   "${SCFUZZBENCH_ROOT}/shutdown.sh" || true
 }
 
+runner_metrics_enabled() {
+  local flag="${SCFUZZBENCH_RUNNER_METRICS:-1}"
+  case "${flag}" in
+    0|false|FALSE|no|NO|off|OFF)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+start_runner_metrics() {
+  if ! runner_metrics_enabled; then
+    log "Runner metrics disabled (SCFUZZBENCH_RUNNER_METRICS=${SCFUZZBENCH_RUNNER_METRICS})"
+    return 0
+  fi
+  if [[ -n "${SCFUZZBENCH_RUNNER_METRICS_PID:-}" ]] && kill -0 "${SCFUZZBENCH_RUNNER_METRICS_PID}" 2>/dev/null; then
+    return 0
+  fi
+  if [[ -z "${SCFUZZBENCH_LOG_DIR:-}" ]]; then
+    log "Runner metrics skipped; SCFUZZBENCH_LOG_DIR is empty."
+    return 0
+  fi
+  mkdir -p "${SCFUZZBENCH_LOG_DIR}"
+  local metrics_file="${SCFUZZBENCH_LOG_DIR}/runner_metrics.csv"
+  local interval="${SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS:-5}"
+  if [[ ! "${interval}" =~ ^[0-9]+$ ]] || [[ "${interval}" -le 0 ]]; then
+    interval=5
+  fi
+  printf "%s\n" \
+    "timestamp,uptime_seconds,load1,load5,load15,cpu_user_pct,cpu_system_pct,cpu_idle_pct,cpu_iowait_pct,mem_total_kb,mem_available_kb,mem_used_kb,swap_total_kb,swap_free_kb,swap_used_kb" \
+    >"${metrics_file}"
+
+  (
+    set +e
+    set +u
+    set +o pipefail
+
+    read_cpu() {
+      local cpu user nice system idle iowait irq softirq steal
+      if read -r cpu user nice system idle iowait irq softirq steal _ < /proc/stat; then
+        local total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+        local idle_all=$((idle + iowait))
+        echo "${total} ${user} ${system} ${idle_all} ${iowait}"
+      else
+        echo "0 0 0 0 0"
+      fi
+    }
+
+    local prev_total prev_user prev_system prev_idle prev_iowait
+    read -r prev_total prev_user prev_system prev_idle prev_iowait <<< "$(read_cpu)"
+
+    while true; do
+      local ts uptime_seconds load1 load5 load15
+      ts=$(date -Is)
+      uptime_seconds=$(awk '{print int($1)}' /proc/uptime 2>/dev/null)
+      if [[ -z "${uptime_seconds}" ]]; then
+        uptime_seconds=0
+      fi
+      if read -r load1 load5 load15 _ < /proc/loadavg; then
+        :
+      else
+        load1=0
+        load5=0
+        load15=0
+      fi
+
+      local mem_total mem_avail swap_total swap_free
+      read -r mem_total mem_avail swap_total swap_free < <(
+        awk '/MemTotal/ {mt=$2} /MemAvailable/ {ma=$2} /SwapTotal/ {st=$2} /SwapFree/ {sf=$2} END {print mt+0, ma+0, st+0, sf+0}' /proc/meminfo 2>/dev/null
+      )
+      mem_total=${mem_total:-0}
+      mem_avail=${mem_avail:-0}
+      swap_total=${swap_total:-0}
+      swap_free=${swap_free:-0}
+      local mem_used=$((mem_total - mem_avail))
+      local swap_used=$((swap_total - swap_free))
+
+      local cur_total cur_user cur_system cur_idle cur_iowait
+      read -r cur_total cur_user cur_system cur_idle cur_iowait <<< "$(read_cpu)"
+      local delta_total=$((cur_total - prev_total))
+      local delta_user=$((cur_user - prev_user))
+      local delta_system=$((cur_system - prev_system))
+      local delta_idle=$((cur_idle - prev_idle))
+      local delta_iowait=$((cur_iowait - prev_iowait))
+
+      local cpu_user_pct cpu_system_pct cpu_idle_pct cpu_iowait_pct
+      if [[ "${delta_total}" -gt 0 ]]; then
+        cpu_user_pct=$(awk -v v="${delta_user}" -v t="${delta_total}" 'BEGIN { printf "%.2f", (v / t) * 100 }')
+        cpu_system_pct=$(awk -v v="${delta_system}" -v t="${delta_total}" 'BEGIN { printf "%.2f", (v / t) * 100 }')
+        cpu_idle_pct=$(awk -v v="${delta_idle}" -v t="${delta_total}" 'BEGIN { printf "%.2f", (v / t) * 100 }')
+        cpu_iowait_pct=$(awk -v v="${delta_iowait}" -v t="${delta_total}" 'BEGIN { printf "%.2f", (v / t) * 100 }')
+      else
+        cpu_user_pct="0.00"
+        cpu_system_pct="0.00"
+        cpu_idle_pct="0.00"
+        cpu_iowait_pct="0.00"
+      fi
+
+      printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+        "${ts}" \
+        "${uptime_seconds}" \
+        "${load1}" \
+        "${load5}" \
+        "${load15}" \
+        "${cpu_user_pct}" \
+        "${cpu_system_pct}" \
+        "${cpu_idle_pct}" \
+        "${cpu_iowait_pct}" \
+        "${mem_total}" \
+        "${mem_avail}" \
+        "${mem_used}" \
+        "${swap_total}" \
+        "${swap_free}" \
+        "${swap_used}" \
+        >>"${metrics_file}"
+
+      prev_total=${cur_total}
+      prev_user=${cur_user}
+      prev_system=${cur_system}
+      prev_idle=${cur_idle}
+      prev_iowait=${cur_iowait}
+
+      sleep "${interval}" || break
+    done
+  ) &
+
+  export SCFUZZBENCH_RUNNER_METRICS_PID=$!
+}
+
+stop_runner_metrics() {
+  local pid="${SCFUZZBENCH_RUNNER_METRICS_PID:-}"
+  if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+  fi
+}
+
 finalize_run() {
   local exit_code=$?
   set +e
+  stop_runner_metrics || true
   if [[ -z "${SCFUZZBENCH_UPLOAD_DONE:-}" ]]; then
     if [[ -n "${SCFUZZBENCH_S3_BUCKET:-}" && -n "${SCFUZZBENCH_RUN_ID:-}" && -n "${SCFUZZBENCH_FUZZER_LABEL:-}" ]]; then
       upload_results || true
@@ -74,6 +216,7 @@ finalize_run() {
 
 register_shutdown_trap() {
   install_shutdown_script
+  start_runner_metrics
   trap finalize_run EXIT
 }
 
@@ -330,6 +473,7 @@ run_with_timeout() {
 
 upload_results() {
   require_env SCFUZZBENCH_S3_BUCKET SCFUZZBENCH_RUN_ID SCFUZZBENCH_FUZZER_LABEL
+  stop_runner_metrics || true
   local instance_id
   instance_id=$(get_instance_id)
   local base_name="${instance_id}-${SCFUZZBENCH_FUZZER_LABEL}"

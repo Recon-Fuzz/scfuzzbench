@@ -7,6 +7,8 @@ Each fuzzer lives in `fuzzers/<name>/` with an `install.sh` and `run.sh`. Common
 - `SCFUZZBENCH_PROPERTIES_PATH`: repo-relative path to the properties file that gets patched for `benchmark_type` switching.
 - `SCFUZZBENCH_SHUTDOWN_GRACE_SECONDS`, `SCFUZZBENCH_TIMEOUT_GRACE_SECONDS`: graceful shutdown/timeouts.
 - `SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER`: SSM name for a token used to clone private target repos.
+- `SCFUZZBENCH_RUNNER_METRICS`: set to `0` to disable runner metrics collection (default `1`).
+- `SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS`: sampling interval in seconds for runner metrics (default `5`).
 
 ## Echidna
 

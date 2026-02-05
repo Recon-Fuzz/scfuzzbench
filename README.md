@@ -27,6 +27,7 @@ Artifacts:
   `s3://<bucket>/logs/<benchmark_uuid>/<run_id>/i-XXXX-<fuzzer-version>.zip`
 - Corpus output (when configured):
   `s3://<bucket>/corpus/<benchmark_uuid>/<run_id>/i-XXXX-<fuzzer-version>.zip`
+- Runner metrics (CPU/memory/load) are recorded in `runner_metrics.csv` inside each logs zip.
 
 `<run_id>` defaults to the unix timestamp at apply time. `benchmark_uuid` is an
 MD5 of a manifest including the scfuzzbench commit, target repo/ref, benchmark
