@@ -167,6 +167,12 @@ variable "custom_fuzzer_definitions" {
   default     = []
 }
 
+variable "disabled_fuzzers" {
+  type        = list(string)
+  description = "Fuzzer keys to exclude from the run."
+  default     = []
+}
+
 variable "fuzzer_env" {
   type        = map(string)
   description = "Extra environment variables passed to fuzzer run scripts."
