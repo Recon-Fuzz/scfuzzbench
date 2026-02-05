@@ -411,7 +411,10 @@ def main() -> int:
     validate_monotonic(df)
 
     if args.budget is None:
-        budget = float(df["time_hours"].max())
+        max_time = float(df["time_hours"].max())
+        budget = float(round(max_time))
+        if budget <= 0:
+            budget = max_time
     else:
         budget = float(args.budget)
     checkpoints = [float(x) for x in args.checkpoints.split(",") if x.strip()]
