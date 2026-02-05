@@ -170,9 +170,9 @@ def parse_medusa_log(
             if elapsed_match:
                 last_elapsed = parse_duration(elapsed_match.group(1))
 
-            failed_match = re.search(r"Assertion Test:\s*(.+)$", clean_line)
+            failed_match = re.search(r"(Assertion|Property) Test:\s*(.+)$", clean_line)
             if "[FAILED]" in clean_line and failed_match:
-                last_failed = failed_match.group(1).strip()
+                last_failed = failed_match.group(2).strip()
                 if last_failed not in seen and last_elapsed is not None:
                     seen.add(last_failed)
                     events.append(
