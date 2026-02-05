@@ -26,6 +26,70 @@ require_env() {
   done
 }
 
+is_positive_int() {
+  local value=$1
+  [[ "${value}" =~ ^[0-9]+$ ]] && [[ "${value}" -gt 0 ]]
+}
+
+get_vcpu_count() {
+  local count=""
+  if command -v nproc >/dev/null 2>&1; then
+    count=$(nproc --all 2>/dev/null || nproc 2>/dev/null || true)
+  fi
+  if ! is_positive_int "${count}"; then
+    count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+  fi
+  if ! is_positive_int "${count}"; then
+    count=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || true)
+  fi
+  if ! is_positive_int "${count}"; then
+    count=1
+  fi
+  echo "${count}"
+}
+
+resolve_worker_count() {
+  if [[ -n "${SCFUZZBENCH_WORKERS_RESOLVED:-}" ]]; then
+    echo "${SCFUZZBENCH_WORKERS_RESOLVED}"
+    return 0
+  fi
+
+  local override="${SCFUZZBENCH_WORKERS:-}"
+  local source="vcpus"
+  local value=""
+  if is_positive_int "${override}"; then
+    value="${override}"
+    source="override"
+  else
+    if [[ -n "${override}" ]]; then
+      log "Invalid SCFUZZBENCH_WORKERS='${override}', falling back to vCPU count."
+    fi
+    value=$(get_vcpu_count)
+  fi
+
+  SCFUZZBENCH_WORKERS="${value}"
+  SCFUZZBENCH_WORKERS_RESOLVED="${value}"
+  export SCFUZZBENCH_WORKERS
+  export SCFUZZBENCH_WORKERS_RESOLVED
+  log "Resolved worker count: ${value} (source: ${source})"
+  echo "${value}"
+}
+
+set_default_worker_env() {
+  local var_name=$1
+  local current="${!var_name:-}"
+  if is_positive_int "${current}"; then
+    return 0
+  fi
+  if [[ -n "${current}" ]]; then
+    log "Invalid ${var_name}='${current}', falling back to worker default."
+  fi
+  local value
+  value=$(resolve_worker_count)
+  printf -v "${var_name}" '%s' "${value}"
+  export "${var_name}"
+}
+
 prepare_workspace() {
   mkdir -p "${SCFUZZBENCH_ROOT}" "${SCFUZZBENCH_WORKDIR}" "${SCFUZZBENCH_LOG_DIR}"
 }
