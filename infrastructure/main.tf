@@ -165,30 +165,10 @@ resource "aws_s3_bucket_public_access_block" "logs" {
   count = local.bucket_name != "" ? 1 : 0
 
   bucket                  = local.bucket_name
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-data "aws_iam_policy_document" "logs_public_read" {
-  statement {
-    sid     = "PublicReadGetObject"
-    actions = ["s3:GetObject"]
-
-    principals {
-      type        = "*"
-      identifiers = ["*"]
-    }
-
-    resources = ["arn:aws:s3:::${local.bucket_name}/*"]
-  }
-}
-
-resource "aws_s3_bucket_policy" "logs_public_read" {
-  count  = local.bucket_name != "" ? 1 : 0
-  bucket = local.bucket_name
-  policy = data.aws_iam_policy_document.logs_public_read.json
+  block_public_acls       = !var.bucket_public_read
+  block_public_policy     = !var.bucket_public_read
+  ignore_public_acls      = !var.bucket_public_read
+  restrict_public_buckets = !var.bucket_public_read
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
@@ -280,6 +260,30 @@ data "aws_iam_policy_document" "s3_access" {
       resources = [statement.value]
     }
   }
+}
+
+data "aws_iam_policy_document" "public_read" {
+  count = var.bucket_public_read ? 1 : 0
+
+  statement {
+    sid     = "PublicReadAllObjects"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    resources = [
+      "arn:aws:s3:::${local.bucket_name}/*"
+    ]
+  }
+}
+
+resource "aws_s3_bucket_policy" "public_read" {
+  count = var.bucket_public_read ? 1 : 0
+
+  bucket = local.bucket_name
+  policy = data.aws_iam_policy_document.public_read[0].json
 }
 
 resource "aws_iam_role_policy" "s3_access" {

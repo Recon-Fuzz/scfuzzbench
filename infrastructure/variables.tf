@@ -143,6 +143,12 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
+variable "bucket_public_read" {
+  type        = bool
+  description = "Allow public read access to all objects in the logs bucket."
+  default     = true
+}
+
 variable "run_id" {
   type        = string
   description = "Run identifier (defaults to unix timestamp at apply time)."
@@ -177,8 +183,9 @@ variable "fuzzer_env" {
   type        = map(string)
   description = "Extra environment variables passed to fuzzer run scripts."
   default = {
-    ECHIDNA_CONFIG = "echidna.yaml"
-    ECHIDNA_TARGET = "tests/recon/CryticTester.sol"
-    ECHIDNA_CONTRACT = "CryticTester"
+    ECHIDNA_CONFIG     = "echidna.yaml"
+    ECHIDNA_TARGET     = "tests/recon/CryticTester.sol"
+    ECHIDNA_CONTRACT   = "CryticTester"
+    ECHIDNA_EXTRA_ARGS = "--test-limit 1000000000"
   }
 }

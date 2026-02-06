@@ -16,6 +16,25 @@ log() {
   echo "[$(date -Is)] $*"
 }
 
+retry_cmd() {
+  local max_retries=${1:-5}
+  local delay=${2:-60}
+  shift 2
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( attempt >= max_retries )); then
+      log "Command failed after ${attempt} attempts: $*"
+      return 1
+    fi
+    log "Command failed (attempt ${attempt}/${max_retries}); retrying in ${delay}s: $*"
+    sleep "${delay}" || true
+    attempt=$((attempt + 1))
+  done
+}
+
 require_env() {
   local name
   for name in "$@"; do
@@ -557,11 +576,11 @@ upload_results() {
     log_base=$(basename "${SCFUZZBENCH_LOG_DIR}")
     (cd "${log_parent}" && zip -r -q "${log_zip}" "${log_base}")
     log "Uploading logs to ${log_dest}"
-    aws s3 cp "${log_zip}" "${log_dest}" --no-progress
+    retry_cmd 5 60 aws s3 cp "${log_zip}" "${log_dest}" --no-progress
     if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then
       local manifest_path="${upload_dir}/benchmark_manifest.json"
       echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
-      aws s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
+      retry_cmd 5 60 aws s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
     fi
   else
     log "No logs directory found; skipping log upload."
@@ -577,7 +596,7 @@ upload_results() {
     corpus_base=$(basename "${SCFUZZBENCH_CORPUS_DIR}")
     (cd "${corpus_parent}" && zip -r -q "${corpus_zip}" "${corpus_base}")
     log "Uploading corpus to ${corpus_dest}"
-    aws s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
+    retry_cmd 5 60 aws s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
   else
     log "No corpus directory configured or found; skipping corpus upload."
   fi
