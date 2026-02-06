@@ -1,0 +1,368 @@
+name: Benchmark Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_uuid:
+        description: "Benchmark UUID to release (optional; leave empty to auto-discover)."
+        required: false
+        default: ""
+      run_id:
+        description: "Run ID to release (optional; leave empty to auto-discover)."
+        required: false
+        default: ""
+      report_budget_hours:
+        description: "Override report budget hours (optional)."
+        required: false
+        default: ""
+      exclude_fuzzers:
+        description: "Comma-separated fuzzers to exclude (optional)."
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      has_runs: ${{ steps.discover.outputs.has_runs }}
+      matrix: ${{ steps.discover.outputs.matrix }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
+    steps:
+      - name: Ensure AWS credentials are configured
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets." >&2
+            exit 1
+          fi
+          if [ -z "${AWS_REGION}" ]; then
+            echo "Set AWS_REGION secret." >&2
+            exit 1
+          fi
+          if [ -z "${SCFUZZBENCH_BUCKET}" ]; then
+            echo "Set SCFUZZBENCH_BUCKET secret." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Discover runs
+        id: discover
+        env:
+          BENCHMARK_UUID: ${{ inputs.benchmark_uuid }}
+          RUN_ID: ${{ inputs.run_id }}
+          REPORT_BUDGET_HOURS: ${{ inputs.report_budget_hours }}
+          GRACE_SECONDS: "3600"
+        run: |
+          set -euo pipefail
+          if [[ -n "${BENCHMARK_UUID}" || -n "${RUN_ID}" ]]; then
+            if [[ -z "${BENCHMARK_UUID}" || -z "${RUN_ID}" ]]; then
+              echo "Both benchmark_uuid and run_id are required when manually specifying a run." >&2
+              exit 1
+            fi
+            matrix=$(python3 - <<'PY'
+import json
+import os
+
+entry = {
+    "benchmark_uuid": os.environ["BENCHMARK_UUID"],
+    "run_id": os.environ["RUN_ID"],
+}
+report_budget = os.environ.get("REPORT_BUDGET_HOURS", "").strip()
+if report_budget:
+    entry["report_budget_hours"] = report_budget
+print(json.dumps({"include": [entry]}, separators=(",", ":")))
+PY
+            )
+            echo "has_runs=true" >> "${GITHUB_OUTPUT}"
+            echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          matrix=$(python3 - <<'PY'
+import json
+import os
+import subprocess
+import time
+
+bucket = os.environ["SCFUZZBENCH_BUCKET"]
+grace = int(os.environ.get("GRACE_SECONDS", "3600"))
+now = int(time.time())
+
+def aws(*args: str) -> str:
+    return subprocess.check_output(["aws", *args], text=True)
+
+def list_prefixes(prefix: str) -> list[str]:
+    data = json.loads(
+        aws(
+            "s3api",
+            "list-objects-v2",
+            "--bucket",
+            bucket,
+            "--prefix",
+            prefix,
+            "--delimiter",
+            "/",
+            "--output",
+            "json",
+        )
+    )
+    return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
+
+runs: list[dict] = []
+for bench_prefix in list_prefixes("logs/"):
+    parts = bench_prefix.strip("/").split("/")
+    if len(parts) < 2:
+        continue
+    benchmark_uuid = parts[1]
+    for run_prefix in list_prefixes(f"logs/{benchmark_uuid}/"):
+        run_parts = run_prefix.strip("/").split("/")
+        if len(run_parts) < 3:
+            continue
+        run_id = run_parts[2]
+        manifest_key = f"logs/{benchmark_uuid}/{run_id}/manifest.json"
+        try:
+            manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
+            manifest = json.loads(manifest_raw)
+        except Exception:
+            continue
+        try:
+            timeout_hours = float(manifest.get("timeout_hours", 24))
+        except Exception:
+            timeout_hours = 24.0
+        try:
+            run_start = int(run_id)
+        except ValueError:
+            continue
+        if now >= run_start + int(timeout_hours * 3600) + grace:
+            runs.append(
+                {
+                    "benchmark_uuid": benchmark_uuid,
+                    "run_id": run_id,
+                    "timeout_hours": timeout_hours,
+                }
+            )
+
+print(json.dumps({"include": runs}, separators=(",", ":")))
+PY
+          )
+
+          if [[ "${matrix}" == '{"include":[]}' ]]; then
+            echo "has_runs=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_runs=true" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
+  release:
+    needs: discover
+    if: ${{ needs.discover.outputs.has_runs == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check for existing release
+        id: release_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="scfuzzbench-${{ matrix.benchmark_uuid }}-${{ matrix.run_id }}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Python
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install analysis dependencies
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        run: make analysis-venv
+
+      - name: Fetch manifest
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        id: manifest
+        env:
+          REPORT_BUDGET_HOURS: ${{ matrix.report_budget_hours }}
+        run: |
+          set -euo pipefail
+          dest_root="${GITHUB_WORKSPACE}/analysis-artifacts/${{ matrix.run_id }}"
+          analysis_dir="${dest_root}/analysis"
+          mkdir -p "${analysis_dir}"
+          manifest_key="logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}/manifest.json"
+          aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${manifest_key}" "${analysis_dir}/manifest.json"
+
+          timeout_hours="${{ matrix.timeout_hours }}"
+          if [[ -z "${timeout_hours}" || "${timeout_hours}" == "null" ]]; then
+            timeout_hours=$(ANALYSIS_DIR="${analysis_dir}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+manifest_path = Path(os.environ["ANALYSIS_DIR"]) / "manifest.json"
+manifest = json.loads(manifest_path.read_text())
+value = manifest.get("timeout_hours", 24)
+print(value)
+PY
+)
+          fi
+
+          report_budget="${REPORT_BUDGET_HOURS}"
+          if [[ -z "${report_budget}" ]]; then
+            report_budget="${timeout_hours}"
+          fi
+
+          echo "timeout_hours=${timeout_hours}" >> "${GITHUB_OUTPUT}"
+          echo "report_budget_hours=${report_budget}" >> "${GITHUB_OUTPUT}"
+          echo "dest_root=${dest_root}" >> "${GITHUB_OUTPUT}"
+          echo "analysis_dir=${analysis_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run analysis
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        env:
+          BUCKET: ${{ env.SCFUZZBENCH_BUCKET }}
+          RUN_ID: ${{ matrix.run_id }}
+          BENCHMARK_UUID: ${{ matrix.benchmark_uuid }}
+          ARTIFACT_CATEGORY: both
+          DEST: ${{ steps.manifest.outputs.dest_root }}
+          DURATION_HOURS: ${{ steps.manifest.outputs.report_budget_hours }}
+          REPORT_BUDGET: ${{ steps.manifest.outputs.report_budget_hours }}
+          EXCLUDE_FUZZERS: ${{ inputs.exclude_fuzzers }}
+        run: |
+          set -euo pipefail
+          make results-analyze-all
+
+      - name: Build release bundles
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        id: bundles
+        run: |
+          set -euo pipefail
+          dest_root="${{ steps.manifest.outputs.dest_root }}"
+          analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
+          release_dir="${dest_root}/release"
+          mkdir -p "${release_dir}"
+
+          (cd "${analysis_dir}" && zip -r "${release_dir}/analysis.zip" .)
+
+          if compgen -G "${dest_root}/logs/zips/*.zip" > /dev/null; then
+            (cd "${dest_root}/logs/zips" && zip -r "${release_dir}/logs.zip" .)
+            echo "has_logs_zip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_logs_zip=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          if compgen -G "${dest_root}/corpus/zips/*.zip" > /dev/null; then
+            (cd "${dest_root}/corpus/zips" && zip -r "${release_dir}/corpus.zip" .)
+            echo "has_corpus_zip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_corpus_zip=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload analysis artifacts to S3
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        run: |
+          set -euo pipefail
+          analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
+          release_dir="${{ steps.bundles.outputs.release_dir }}"
+          s3_prefix="analysis/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+
+          aws s3 cp "${analysis_dir}/REPORT.md" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/REPORT.md" --content-type text/markdown
+          aws s3 cp "${analysis_dir}/bugs_over_time.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bugs_over_time.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/time_to_k.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/time_to_k.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/final_distribution.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/final_distribution.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/plateau_and_late_share.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/plateau_and_late_share.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/manifest.json" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/manifest.json" --content-type application/json
+
+          aws s3 cp "${release_dir}/analysis.zip" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bundles/analysis.zip" --content-type application/zip
+          if [[ "${{ steps.bundles.outputs.has_logs_zip }}" == "true" ]]; then
+            aws s3 cp "${release_dir}/logs.zip" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bundles/logs.zip" --content-type application/zip
+          fi
+          if [[ "${{ steps.bundles.outputs.has_corpus_zip }}" == "true" ]]; then
+            aws s3 cp "${release_dir}/corpus.zip" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bundles/corpus.zip" --content-type application/zip
+          fi
+
+      - name: Compose release body
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        id: body
+        run: |
+          set -euo pipefail
+          analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
+          report_path="${analysis_dir}/REPORT.md"
+          release_body="${analysis_dir}/RELEASE.md"
+          cp "${report_path}" "${release_body}"
+
+          base_url="https://${SCFUZZBENCH_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
+          analysis_base="${base_url}/analysis/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+          logs_base="${base_url}/logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+          corpus_base="${base_url}/corpus/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+          bundles_base="${analysis_base}/bundles"
+
+          {
+            echo ""
+            echo "## Artifacts"
+            echo ""
+            echo "Charts:"
+            echo "![Bugs Over Time](${analysis_base}/bugs_over_time.png)"
+            echo "![Time To K](${analysis_base}/time_to_k.png)"
+            echo "![Final Distribution](${analysis_base}/final_distribution.png)"
+            echo "![Plateau And Late Share](${analysis_base}/plateau_and_late_share.png)"
+            echo ""
+            echo "Downloads:"
+            echo "- Analysis bundle: ${bundles_base}/analysis.zip"
+            if [[ "${{ steps.bundles.outputs.has_logs_zip }}" == "true" ]]; then
+              echo "- Logs bundle: ${bundles_base}/logs.zip"
+            fi
+            if [[ "${{ steps.bundles.outputs.has_corpus_zip }}" == "true" ]]; then
+              echo "- Corpus bundle: ${bundles_base}/corpus.zip"
+            fi
+            echo "- Raw logs prefix: ${logs_base}/"
+            if [[ "${{ steps.bundles.outputs.has_corpus_zip }}" == "true" ]]; then
+              echo "- Raw corpus prefix: ${corpus_base}/"
+            fi
+          } >> "${release_body}"
+
+          echo "release_body=${release_body}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release_check.outputs.tag }}"
+          gh release create "${tag}" --title "${tag}" --notes-file "${{ steps.body.outputs.release_body }}"

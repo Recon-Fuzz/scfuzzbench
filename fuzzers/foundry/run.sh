@@ -31,6 +31,22 @@ if [[ -n "${FOUNDRY_TEST_ARGS:-}" ]]; then
   read -r -a extra_args <<< "${FOUNDRY_TEST_ARGS}"
 fi
 
+set_default_worker_env FOUNDRY_THREADS
+if [[ -n "${FOUNDRY_THREADS:-}" ]]; then
+  has_threads_arg=0
+  for arg in "${extra_args[@]}"; do
+    case "${arg}" in
+      --threads|--jobs|-j|--threads=*|--jobs=*|-j*)
+        has_threads_arg=1
+        break
+        ;;
+    esac
+  done
+  if [[ "${has_threads_arg}" -eq 0 ]]; then
+    extra_args=(--threads "${FOUNDRY_THREADS}" "${extra_args[@]}")
+  fi
+fi
+
 set +e
 pushd "${repo_dir}" >/dev/null
 run_with_timeout "${log_file}" forge test --mc CryticToFoundry "${extra_args[@]}"
