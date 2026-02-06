@@ -10,6 +10,9 @@ SCFUZZBENCH_BENCHMARK_UUID=${SCFUZZBENCH_BENCHMARK_UUID:-}
 SCFUZZBENCH_BENCHMARK_MANIFEST_B64=${SCFUZZBENCH_BENCHMARK_MANIFEST_B64:-}
 SCFUZZBENCH_PROPERTIES_PATH=${SCFUZZBENCH_PROPERTIES_PATH:-}
 
+SCFUZZBENCH_AWS_CREDS_ENV_FILE=${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}
+SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}
+
 log() {
   echo "[$(date -Is)] $*"
 }
@@ -93,6 +96,11 @@ finalize_run() {
 
 register_shutdown_trap() {
   install_shutdown_script
+  if [[ -z "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    cache_instance_id || true
+    cache_aws_creds_from_imds || true
+    start_aws_creds_refresher || true
+  fi
   trap finalize_run EXIT
 }
 
@@ -180,12 +188,174 @@ install_slither_analyzer() {
   command -v slither
 }
 
-get_instance_id() {
+imds_token() {
+  curl -fsS --connect-timeout 1 --max-time 2 \
+    -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true
+}
+
+imds_get() {
+  local path=$1
   local token
-  token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-  curl -s -H "X-aws-ec2-metadata-token: ${token}" \
-    http://169.254.169.254/latest/meta-data/instance-id
+  token=$(imds_token)
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  curl -fsS --connect-timeout 1 --max-time 2 \
+    -H "X-aws-ec2-metadata-token: ${token}" \
+    "http://169.254.169.254/latest/${path}" 2>/dev/null
+}
+
+get_instance_id() {
+  imds_get "meta-data/instance-id" || true
+}
+
+cache_instance_id() {
+  if [[ -n "${SCFUZZBENCH_INSTANCE_ID:-}" ]]; then
+    return 0
+  fi
+  local instance_id
+  instance_id=$(get_instance_id 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -n "${instance_id}" ]]; then
+    export SCFUZZBENCH_INSTANCE_ID="${instance_id}"
+    return 0
+  fi
+  instance_id=$(hostname 2>/dev/null || true)
+  if [[ -z "${instance_id}" ]]; then
+    instance_id="unknown"
+  fi
+  export SCFUZZBENCH_INSTANCE_ID="${instance_id}"
+  return 0
+}
+
+cache_aws_creds_from_imds() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    log "jq not found; skipping IMDS credential cache."
+    return 1
+  fi
+
+  local role_name
+  role_name=$(imds_get "meta-data/iam/security-credentials/" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -z "${role_name}" ]]; then
+    log "Could not fetch IAM role name from IMDS; skipping credential cache."
+    return 1
+  fi
+
+  local creds_json
+  creds_json=$(imds_get "meta-data/iam/security-credentials/${role_name}" 2>/dev/null || true)
+  if [[ -z "${creds_json}" ]]; then
+    log "Could not fetch IAM role credentials from IMDS; skipping credential cache."
+    return 1
+  fi
+
+  local access_key_id_sh
+  local secret_access_key_sh
+  local session_token_sh
+  local expiration_raw
+  local expiration_sh
+  access_key_id_sh=$(jq -r '.AccessKeyId // empty | @sh' <<<"${creds_json}")
+  secret_access_key_sh=$(jq -r '.SecretAccessKey // empty | @sh' <<<"${creds_json}")
+  session_token_sh=$(jq -r '.Token // empty | @sh' <<<"${creds_json}")
+  expiration_raw=$(jq -r '.Expiration // empty' <<<"${creds_json}")
+  expiration_sh=$(jq -r '.Expiration // empty | @sh' <<<"${creds_json}")
+  if [[ -z "${access_key_id_sh}" || -z "${secret_access_key_sh}" || -z "${session_token_sh}" ]]; then
+    log "IMDS returned incomplete IAM role credentials; skipping credential cache."
+    return 1
+  fi
+
+  local expiration_epoch=""
+  if [[ -n "${expiration_raw}" ]]; then
+    expiration_epoch=$(date -u -d "${expiration_raw}" +%s 2>/dev/null || true)
+  fi
+
+  local creds_file="${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}"
+  mkdir -p "$(dirname "${creds_file}")"
+  umask 077
+  local tmp_file
+  tmp_file=$(mktemp "${creds_file}.tmp.XXXXXX")
+  chmod 0600 "${tmp_file}"
+  {
+    echo "# Cached from IMDS. Used to keep S3/SSM uploads working during shutdown."
+    echo "AWS_ACCESS_KEY_ID=${access_key_id_sh}"
+    echo "AWS_SECRET_ACCESS_KEY=${secret_access_key_sh}"
+    echo "AWS_SESSION_TOKEN=${session_token_sh}"
+    if [[ -n "${expiration_sh}" ]]; then
+      echo "SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION=${expiration_sh}"
+    fi
+    if [[ -n "${expiration_epoch}" ]]; then
+      echo "SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH=${expiration_epoch}"
+    fi
+  } >"${tmp_file}"
+  mv -f "${tmp_file}" "${creds_file}"
+  return 0
+}
+
+load_cached_aws_creds() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 1
+  fi
+  local creds_file="${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}"
+  if [[ ! -f "${creds_file}" ]]; then
+    return 1
+  fi
+  # shellcheck disable=SC1090
+  set -a
+  source "${creds_file}" || { set +a; return 1; }
+  set +a
+
+  if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" || -z "${AWS_SESSION_TOKEN:-}" ]]; then
+    return 1
+  fi
+
+  local exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH:-}"
+  if [[ -n "${exp_epoch}" && "${exp_epoch}" =~ ^[0-9]+$ ]]; then
+    local now
+    now=$(date -u +%s)
+    if (( exp_epoch <= now )); then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+aws_cli() {
+  if [[ -z "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    if ! load_cached_aws_creds; then
+      cache_aws_creds_from_imds >/dev/null 2>&1 || true
+      load_cached_aws_creds >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" && -n "${AWS_SESSION_TOKEN:-}" ]]; then
+      AWS_EC2_METADATA_DISABLED=true aws "$@"
+      return $?
+    fi
+  fi
+  aws "$@"
+}
+
+start_aws_creds_refresher() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${SCFUZZBENCH_AWS_CREDS_REFRESH_PID:-}" ]] && kill -0 "${SCFUZZBENCH_AWS_CREDS_REFRESH_PID}" 2>/dev/null; then
+    return 0
+  fi
+
+  local interval="${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}"
+  if [[ ! "${interval}" =~ ^[0-9]+$ ]] || (( interval < 60 )); then
+    interval=300
+  fi
+
+  (
+    set +e
+    while true; do
+      cache_aws_creds_from_imds >/dev/null 2>&1 || true
+      sleep "${interval}" || true
+    done
+  ) &
+  export SCFUZZBENCH_AWS_CREDS_REFRESH_PID=$!
 }
 
 get_github_token() {
@@ -194,7 +364,7 @@ get_github_token() {
     return 0
   fi
   if [[ -n "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER:-}" ]]; then
-    aws ssm get-parameter --with-decryption --name "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER}" \
+    retry_cmd 5 10 aws_cli ssm get-parameter --with-decryption --name "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER}" \
       --query 'Parameter.Value' --output text
     return 0
   fi
@@ -349,8 +519,8 @@ run_with_timeout() {
 
 upload_results() {
   require_env SCFUZZBENCH_S3_BUCKET SCFUZZBENCH_RUN_ID SCFUZZBENCH_FUZZER_LABEL
-  local instance_id
-  instance_id=$(get_instance_id)
+  cache_instance_id || true
+  local instance_id="${SCFUZZBENCH_INSTANCE_ID:-unknown}"
   local base_name="${instance_id}-${SCFUZZBENCH_FUZZER_LABEL}"
   local upload_dir="${SCFUZZBENCH_ROOT}/upload"
   mkdir -p "${upload_dir}"
@@ -359,6 +529,13 @@ upload_results() {
   if [[ -n "${SCFUZZBENCH_BENCHMARK_UUID}" ]]; then
     prefix="${SCFUZZBENCH_BENCHMARK_UUID}/${SCFUZZBENCH_RUN_ID}"
   fi
+
+  if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then
+    local manifest_path="${upload_dir}/benchmark_manifest.json"
+    echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
+    retry_cmd 5 60 aws_cli s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
+  fi
+
   local log_dest="s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/${base_name}.zip"
   if [[ -d "${SCFUZZBENCH_LOG_DIR}" ]]; then
     log "Zipping logs to ${log_zip}"
@@ -368,12 +545,7 @@ upload_results() {
     log_base=$(basename "${SCFUZZBENCH_LOG_DIR}")
     (cd "${log_parent}" && zip -r -q "${log_zip}" "${log_base}")
     log "Uploading logs to ${log_dest}"
-    retry_cmd 5 60 aws s3 cp "${log_zip}" "${log_dest}" --no-progress
-    if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then
-      local manifest_path="${upload_dir}/benchmark_manifest.json"
-      echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
-      retry_cmd 5 60 aws s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
-    fi
+    retry_cmd 5 60 aws_cli s3 cp "${log_zip}" "${log_dest}" --no-progress
   else
     log "No logs directory found; skipping log upload."
   fi
@@ -388,7 +560,7 @@ upload_results() {
     corpus_base=$(basename "${SCFUZZBENCH_CORPUS_DIR}")
     (cd "${corpus_parent}" && zip -r -q "${corpus_zip}" "${corpus_base}")
     log "Uploading corpus to ${corpus_dest}"
-    retry_cmd 5 60 aws s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
+    retry_cmd 5 60 aws_cli s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
   else
     log "No corpus directory configured or found; skipping corpus upload."
   fi
