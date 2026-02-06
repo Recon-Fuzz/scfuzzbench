@@ -242,7 +242,7 @@ def plot_bugs_over_time_runs(df_grid: pd.DataFrame, outpath: Path) -> None:
         arr = pivot.to_numpy(dtype=float)
         p50 = np.percentile(arr, 50, axis=1)
 
-        color = next(ax._get_lines.prop_cycler)["color"]
+        color = ax._get_lines.get_next_color()
         for col in range(arr.shape[1]):
             plt.step(time, np.rint(arr[:, col]), where="post", linewidth=1.0, alpha=0.25, color=color)
         plt.step(
