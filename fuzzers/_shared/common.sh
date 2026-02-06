@@ -301,38 +301,74 @@ load_cached_aws_creds() {
   if [[ ! -f "${creds_file}" ]]; then
     return 1
   fi
+
+  local old_ak_set=0
+  local old_sk_set=0
+  local old_st_set=0
+  local old_exp_set=0
+  local old_exp_epoch_set=0
+  if [[ "${AWS_ACCESS_KEY_ID+x}" == "x" ]]; then old_ak_set=1; fi
+  if [[ "${AWS_SECRET_ACCESS_KEY+x}" == "x" ]]; then old_sk_set=1; fi
+  if [[ "${AWS_SESSION_TOKEN+x}" == "x" ]]; then old_st_set=1; fi
+  if [[ "${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION+x}" == "x" ]]; then old_exp_set=1; fi
+  if [[ "${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH+x}" == "x" ]]; then old_exp_epoch_set=1; fi
+  local old_ak="${AWS_ACCESS_KEY_ID-}"
+  local old_sk="${AWS_SECRET_ACCESS_KEY-}"
+  local old_st="${AWS_SESSION_TOKEN-}"
+  local old_exp="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION-}"
+  local old_exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH-}"
+
+  local ok=0
   # shellcheck disable=SC1090
   set -a
-  source "${creds_file}" || { set +a; return 1; }
+  if source "${creds_file}"; then
+    ok=1
+  fi
   set +a
 
-  if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" || -z "${AWS_SESSION_TOKEN:-}" ]]; then
-    return 1
-  fi
-
-  local exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH:-}"
-  if [[ -n "${exp_epoch}" && "${exp_epoch}" =~ ^[0-9]+$ ]]; then
-    local now
-    now=$(date -u +%s)
-    if (( exp_epoch <= now )); then
-      return 1
+  if (( ok )); then
+    if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" || -z "${AWS_SESSION_TOKEN:-}" ]]; then
+      ok=0
+    fi
+    local exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH:-}"
+    if [[ -n "${exp_epoch}" && "${exp_epoch}" =~ ^[0-9]+$ ]]; then
+      local now
+      now=$(date -u +%s)
+      if (( exp_epoch <= now )); then
+        ok=0
+      fi
     fi
   fi
-  return 0
+
+  if (( ok )); then
+    return 0
+  fi
+
+  if (( old_ak_set )); then export AWS_ACCESS_KEY_ID="${old_ak}"; else unset AWS_ACCESS_KEY_ID; fi
+  if (( old_sk_set )); then export AWS_SECRET_ACCESS_KEY="${old_sk}"; else unset AWS_SECRET_ACCESS_KEY; fi
+  if (( old_st_set )); then export AWS_SESSION_TOKEN="${old_st}"; else unset AWS_SESSION_TOKEN; fi
+  if (( old_exp_set )); then export SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION="${old_exp}"; else unset SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION; fi
+  if (( old_exp_epoch_set )); then export SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH="${old_exp_epoch}"; else unset SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH; fi
+  return 1
 }
 
 aws_cli() {
+  local have_cached=0
   if [[ -z "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
-    if ! load_cached_aws_creds; then
+    if load_cached_aws_creds; then
+      have_cached=1
+    else
       cache_aws_creds_from_imds >/dev/null 2>&1 || true
-      load_cached_aws_creds >/dev/null 2>&1 || true
-    fi
-    if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" && -n "${AWS_SESSION_TOKEN:-}" ]]; then
-      AWS_EC2_METADATA_DISABLED=true aws "$@"
-      return $?
+      if load_cached_aws_creds >/dev/null 2>&1; then
+        have_cached=1
+      fi
     fi
   fi
-  aws "$@"
+  if (( have_cached )); then
+    AWS_EC2_METADATA_DISABLED=true aws "$@"
+  else
+    aws "$@"
+  fi
 }
 
 start_aws_creds_refresher() {
