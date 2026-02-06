@@ -250,8 +250,9 @@ def plot_bugs_over_time_runs(df_grid: pd.DataFrame, outpath: Path) -> None:
                 np.rint(arr[:, col]),
                 where="post",
                 linewidth=1.0,
-                alpha=0.25,
+                alpha=0.35,
                 color=color,
+                linestyle=":",
                 label=f"{fuzzer} {run_label}",
             )
         plt.step(
