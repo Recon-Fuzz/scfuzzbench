@@ -243,14 +243,23 @@ def plot_bugs_over_time_runs(df_grid: pd.DataFrame, outpath: Path) -> None:
         p50 = np.percentile(arr, 50, axis=1)
 
         color = ax._get_lines.get_next_color()
-        for col in range(arr.shape[1]):
-            plt.step(time, np.rint(arr[:, col]), where="post", linewidth=1.0, alpha=0.25, color=color)
+        run_labels = [str(run_id).split(":", 1)[-1] for run_id in pivot.columns]
+        for col, run_label in enumerate(run_labels):
+            plt.step(
+                time,
+                np.rint(arr[:, col]),
+                where="post",
+                linewidth=1.0,
+                alpha=0.25,
+                color=color,
+                label=f"{fuzzer} {run_label}",
+            )
         plt.step(
             time,
             np.rint(p50),
             where="post",
-            linewidth=3.0,
-            alpha=0.95,
+            linewidth=3.5,
+            alpha=1.0,
             color=color,
             label=f"{fuzzer} (median)",
         )
