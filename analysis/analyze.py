@@ -361,8 +361,8 @@ def parse_logs(logs_dir: Path, run_id: Optional[str]) -> List[Event]:
                     instance_id,
                     fuzzer_label,
                     allow_bang=False,
-                    allow_falsified=False,
-                    allow_failed=True,
+                    allow_falsified=True,
+                    allow_failed=False,
                 )
             )
         else:
