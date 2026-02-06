@@ -33,7 +33,7 @@ fi
 
 set +e
 pushd "${repo_dir}" >/dev/null
-run_with_timeout "${log_file}" forge test "${extra_args[@]}"
+run_with_timeout "${log_file}" forge test --mc CryticToFoundry "${extra_args[@]}"
 exit_code=$?
 popd >/dev/null
 set -e
