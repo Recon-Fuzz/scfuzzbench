@@ -460,6 +460,47 @@ def write_report(
     outpath.write_text("\n".join(lines), encoding="utf-8")
 
 
+def write_no_data_report(
+    *,
+    budget: float,
+    checkpoints: List[float],
+    ks: List[int],
+    outpath: Path,
+    csv_path: Path,
+) -> None:
+    lines: List[str] = []
+    lines.append("# Fuzzer Benchmark Report (from bug-count CSV)")
+    lines.append("")
+    lines.append(f"- Time budget: **{budget:.2f}h**")
+    lines.append(f"- Source CSV: `{csv_path}`")
+    lines.append("")
+    lines.append("## No data")
+    lines.append("")
+    lines.append(
+        "The input CSV contained **no rows**, so there is nothing to plot or compare."
+    )
+    lines.append("")
+    lines.append("Common causes:")
+    lines.append("- No bugs were found in any run (so the event list is empty).")
+    lines.append("- Log parsing failed to detect events for this benchmark.")
+    lines.append("")
+    lines.append("Report parameters:")
+    lines.append(f"- Checkpoints: {', '.join([f'{t:g}h' for t in checkpoints])}")
+    lines.append(f"- ks: {', '.join([str(k) for k in ks])}")
+    lines.append("")
+    outpath.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_placeholder_plot(title: str, outpath: Path, message: str) -> None:
+    plt.figure(figsize=(9, 5))
+    plt.title(title)
+    plt.axis("off")
+    plt.text(0.5, 0.5, message, ha="center", va="center", wrap=True)
+    plt.tight_layout()
+    plt.savefig(outpath, dpi=200)
+    plt.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=Path, required=True)
@@ -475,10 +516,13 @@ def main() -> int:
     validate_monotonic(df)
 
     if args.budget is None:
-        max_time = float(df["time_hours"].max())
-        budget = float(round(max_time))
-        if budget <= 0:
-            budget = max_time
+        if df.empty:
+            budget = 0.0
+        else:
+            max_time = float(df["time_hours"].max())
+            budget = float(round(max_time))
+            if budget <= 0:
+                budget = max_time
     else:
         budget = float(args.budget)
     checkpoints = [float(x) for x in args.checkpoints.split(",") if x.strip()]
@@ -493,6 +537,23 @@ def main() -> int:
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
+
+    if df.empty:
+        write_no_data_report(
+            budget=budget,
+            checkpoints=checkpoints,
+            ks=ks,
+            outpath=outdir / "REPORT.md",
+            csv_path=args.csv,
+        )
+        msg = "No rows in input CSV. This usually means no bugs were found (or parsing produced no events)."
+        write_placeholder_plot("Bugs found over time (median + IQR)", outdir / "bugs_over_time.png", msg)
+        write_placeholder_plot("Bugs found over time (all runs + median)", outdir / "bugs_over_time_runs.png", msg)
+        write_placeholder_plot("Median time-to-k", outdir / "time_to_k.png", msg)
+        write_placeholder_plot("End-of-budget bug count distribution (per run)", outdir / "final_distribution.png", msg)
+        write_placeholder_plot("Plateau time and late discovery share", outdir / "plateau_and_late_share.png", msg)
+        print(f"wrote: {outdir / 'REPORT.md'} (no data)")
+        return 0
 
     df_grid = resample_to_grid(df, grid)
     metrics = compute_metrics(df_grid, budget=budget, checkpoints=checkpoints, ks=ks)
