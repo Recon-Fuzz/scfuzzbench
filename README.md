@@ -171,6 +171,15 @@ make results-inspect DEST="$DEST"
 rg -n \"error:|Usage:|cannot parse value\" \"$DEST/analysis-logs\" -S
 ```
 
+If `make results-prepare` prints `Copied 0 log file(s)`, the fuzzers likely
+exited before they ever wrote `*.log`. In that case, check the EC2 console
+output for bootstrap errors (git auth, build failures, etc.):
+
+```bash
+aws ec2 get-console-output --instance-id i-0123456789abcdef0 --latest --output json \
+  | jq -r '.Output' | tail -n 200
+```
+
 ## GitHub Actions
 
 Two workflows publish runs and releases directly from CI/CD:
@@ -204,3 +213,10 @@ make report-benchmark REPORT_CSV=results.csv REPORT_OUT_DIR=report_out REPORT_BU
 If you need to clone a private target repo, store a short-lived token in SSM
 and set `git_token_ssm_parameter_name` so the instances can fetch it without
 embedding secrets in user-data logs.
+
+Notes:
+- For public repos, leave `git_token_ssm_parameter_name` empty. If it is set,
+  the runner will still attempt an unauthenticated clone first and only use the
+  token if needed.
+- If you see `Invalid username or token` in console output and only
+  `runner_metrics.csv` uploads (no `*.log`), your SSM token value is invalid.
