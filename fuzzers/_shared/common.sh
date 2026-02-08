@@ -16,7 +16,8 @@ SCFUZZBENCH_AWS_CREDS_ENV_FILE=${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_R
 SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}
 
 log() {
-  echo "[$(date -Is)] $*"
+  # Use stderr so command substitutions can safely capture stdout.
+  echo "[$(date -Is)] $*" >&2
 }
 
 retry_cmd() {
