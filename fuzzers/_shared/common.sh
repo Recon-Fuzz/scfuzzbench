@@ -619,49 +619,98 @@ clone_target() {
   require_env SCFUZZBENCH_REPO_URL SCFUZZBENCH_COMMIT
   local repo_dir="${SCFUZZBENCH_WORKDIR}/target"
   local git_token=""
-  git_token=$(get_github_token 2>/dev/null || true)
+  local token_loaded=0
+
+  get_git_token_cached() {
+    if (( token_loaded )); then
+      printf '%s' "${git_token}"
+      return 0
+    fi
+    token_loaded=1
+    git_token=$(get_github_token 2>/dev/null || true)
+    printf '%s' "${git_token}"
+  }
+
+  token_clone_url() {
+    local token
+    token=$(get_git_token_cached)
+    if [[ -z "${token}" ]]; then
+      return 1
+    fi
+    if [[ "${SCFUZZBENCH_REPO_URL}" != https://* ]]; then
+      return 1
+    fi
+    printf '%s' "https://x-access-token:${token}@${SCFUZZBENCH_REPO_URL#https://}"
+    return 0
+  }
+
   if [[ ! -d "${repo_dir}/.git" ]]; then
-    if [[ -n "${git_token}" ]]; then
+    rm -rf "${repo_dir}" || true
+    log "Cloning ${SCFUZZBENCH_REPO_URL}"
+    if ! GIT_TERMINAL_PROMPT=0 git clone "${SCFUZZBENCH_REPO_URL}" "${repo_dir}"; then
       local clone_url
-      if [[ "${SCFUZZBENCH_REPO_URL}" == https://* ]]; then
-        clone_url="https://x-access-token:${git_token}@${SCFUZZBENCH_REPO_URL#https://}"
+      if clone_url=$(token_clone_url); then
+        log "Unauthenticated clone failed; retrying with GitHub token."
+        rm -rf "${repo_dir}" || true
+        GIT_TERMINAL_PROMPT=0 git clone "${clone_url}" "${repo_dir}"
+        git -C "${repo_dir}" remote set-url origin "${clone_url}"
       else
-        clone_url="${SCFUZZBENCH_REPO_URL}"
+        log "Clone failed and no GitHub token is available."
+        return 1
       fi
-      log "Cloning ${SCFUZZBENCH_REPO_URL} with GitHub token"
-      GIT_TERMINAL_PROMPT=0 git clone "${clone_url}" "${repo_dir}"
-      git -C "${repo_dir}" remote set-url origin "${clone_url}"
-    else
-      log "Cloning ${SCFUZZBENCH_REPO_URL}"
-      git clone "${SCFUZZBENCH_REPO_URL}" "${repo_dir}"
     fi
   fi
+
   pushd "${repo_dir}" >/dev/null
-  if [[ -n "${git_token}" ]]; then
-    GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
-  else
-    git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
+
+  if ! GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"; then
+    # If origin is currently using a bad/expired token, public repos should still work without it.
+    log "Fetch failed; retrying with public origin URL."
+    git remote set-url origin "${SCFUZZBENCH_REPO_URL}" || true
+    if ! GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"; then
+      local clone_url
+      if clone_url=$(token_clone_url); then
+        log "Fetch failed; retrying with GitHub token."
+        git remote set-url origin "${clone_url}"
+        GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
+      else
+        log "Fetch failed and no GitHub token is available."
+        return 1
+      fi
+    fi
   fi
+
   git checkout "${SCFUZZBENCH_COMMIT}"
+
   if [[ -f .gitmodules ]]; then
     log "Initializing git submodules"
-    if [[ -n "${git_token}" ]]; then
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "https://github.com/"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "git@github.com:"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "ssh://git@github.com/"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "git://github.com/"
-      sed -i \
-        -e 's#git@github.com:#https://github.com/#g' \
-        -e 's#ssh://git@github.com/#https://github.com/#g' \
-        -e 's#git://github.com/#https://github.com/#g' \
-        .gitmodules
+
+    # Normalize SSH/git URLs to https so public submodules don't require SSH keys.
+    sed -i \
+      -e 's#git@github.com:#https://github.com/#g' \
+      -e 's#ssh://git@github.com/#https://github.com/#g' \
+      -e 's#git://github.com/#https://github.com/#g' \
+      .gitmodules || true
+    git submodule sync --recursive || true
+
+    if ! GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; then
+      local token
+      token=$(get_git_token_cached)
+      if [[ -z "${token}" ]]; then
+        log "Submodule init failed and no GitHub token is available."
+        return 1
+      fi
+      log "Submodule init failed; retrying with GitHub token."
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "https://github.com/"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "git@github.com:"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "ssh://git@github.com/"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "git://github.com/"
       git submodule sync --recursive
-      GIT_TERMINAL_PROMPT=0 git -c url."https://x-access-token:${git_token}@github.com/".insteadOf="https://github.com/" \
+      GIT_TERMINAL_PROMPT=0 git -c url."https://x-access-token:${token}@github.com/".insteadOf="https://github.com/" \
         submodule update --init --recursive
-    else
-      git submodule update --init --recursive
     fi
   fi
+
   popd >/dev/null
 }
 
