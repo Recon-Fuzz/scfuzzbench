@@ -52,3 +52,6 @@ infrastructure/backend.hcl
 __pycache__/
 *.pyc
 .venv-analysis/
+
+# AGENTS
+.worktrees

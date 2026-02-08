@@ -39,11 +39,7 @@ Instructions for working on Terraform in this repository.
 
 ## Worktrees
 
-Every new task must start by creating a git worktree, unless the user specifies otherwise, in which case, this section about Worktrees and PRs do not apply.
-
-All your changes must be implemented in the git worktree.
-
-Worktrees are created with the following naming scheme:
+If the user requests, git worktrees should be created with following naming scheme:
 
 - `.worktrees/issue-ISSUE_ID-SHORT_DESCRIPTION`
 - `ISSUE_ID` comes from the GitHub issue number (e.g. `https://github.com/Recon-Fuzz/scfuzzbench/issues/73` -> `73`)
@@ -53,7 +49,8 @@ If no GitHub issue is provided, use:
 
 - `.worktrees/issue-NA-SHORT_DESCRIPTION` (e.g. `.worktrees/issue-NA-fix-lcov`)
 
-When you are done, open a PR from the worktree branch. Then, new requests by the user should always be implemented on the worktree branch, and the corresponding PR updated.
+When you are done, open a PR from the worktree branch.
+Then, new requests by the user should always be implemented on the worktree branch, and the corresponding PR updated.
 
 ## Analysis workflow
 - Use the Makefile to generate all analysis outputs in one pass:
