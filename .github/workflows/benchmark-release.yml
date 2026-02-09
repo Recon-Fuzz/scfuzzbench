@@ -122,17 +122,17 @@ def list_prefixes(prefix: str) -> list[str]:
     return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
 
 runs: list[dict] = []
-for bench_prefix in list_prefixes("logs/"):
-    parts = bench_prefix.strip("/").split("/")
+for run_prefix in list_prefixes("logs/"):
+    parts = run_prefix.strip("/").split("/")
     if len(parts) < 2:
         continue
-    benchmark_uuid = parts[1]
-    for run_prefix in list_prefixes(f"logs/{benchmark_uuid}/"):
-        run_parts = run_prefix.strip("/").split("/")
-        if len(run_parts) < 3:
+    run_id = parts[1]
+    for bench_prefix in list_prefixes(f"logs/{run_id}/"):
+        bench_parts = bench_prefix.strip("/").split("/")
+        if len(bench_parts) < 3:
             continue
-        run_id = run_parts[2]
-        manifest_key = f"logs/{benchmark_uuid}/{run_id}/manifest.json"
+        benchmark_uuid = bench_parts[2]
+        manifest_key = f"logs/{run_id}/{benchmark_uuid}/manifest.json"
         try:
             manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
             manifest = json.loads(manifest_raw)
@@ -220,9 +220,9 @@ PY
         run: |
           set -euo pipefail
           dest_root="${GITHUB_WORKSPACE}/analysis-artifacts/${{ matrix.run_id }}"
-          analysis_dir="${dest_root}/analysis-artifacts"
+          analysis_dir="${dest_root}/analysis"
           mkdir -p "${analysis_dir}"
-          manifest_key="logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}/manifest.json"
+          manifest_key="logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}/manifest.json"
           aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${manifest_key}" "${analysis_dir}/manifest.json"
 
           timeout_hours="${{ matrix.timeout_hours }}"
@@ -272,7 +272,7 @@ PY
           dest_root="${{ steps.manifest.outputs.dest_root }}"
           analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
 
-          # MkDocs/website + release notes expect these at the top-level.
+          # Website + release notes expect these at the top-level.
           cp "${dest_root}/data/REPORT.md" "${analysis_dir}/REPORT.md"
           cp "${dest_root}/images/bugs_over_time.png" "${analysis_dir}/bugs_over_time.png"
           cp "${dest_root}/images/bugs_over_time_runs.png" "${analysis_dir}/bugs_over_time_runs.png"
@@ -348,8 +348,8 @@ PY
 
           base_url="https://${SCFUZZBENCH_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
           analysis_base="${base_url}/analysis/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
-          logs_base="${base_url}/logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
-          corpus_base="${base_url}/corpus/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+          logs_base="${base_url}/logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}"
+          corpus_base="${base_url}/corpus/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}"
           bundles_base="${analysis_base}/bundles"
 
           {

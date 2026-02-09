@@ -26,7 +26,8 @@ Typical fixes:
    - Upload `REPORT.md`, charts, and bundles to `s3://<bucket>/analysis/<benchmark_uuid>/<run_id>/...`
 3. If the run is junk, delete its S3 prefixes (destructive):
    - `runs/<run_id>/<benchmark_uuid>/...`
-   - `logs/<benchmark_uuid>/<run_id>/...`
+   - `logs/<run_id>/<benchmark_uuid>/...`
+   - `corpus/<run_id>/<benchmark_uuid>/...` (if present)
    - `analysis/<benchmark_uuid>/<run_id>/...` (if partially uploaded)
 
 The docs site keeps these runs visible (with warnings) so maintainers can triage them later.

@@ -24,9 +24,9 @@ Each instance:
 
 Artifacts:
 - Logs:
-  `s3://<bucket>/logs/<benchmark_uuid>/<run_id>/i-XXXX-<fuzzer-version>.zip`
+  `s3://<bucket>/logs/<run_id>/<benchmark_uuid>/i-XXXX-<fuzzer-version>.zip`
 - Corpus output (when configured):
-  `s3://<bucket>/corpus/<benchmark_uuid>/<run_id>/i-XXXX-<fuzzer-version>.zip`
+  `s3://<bucket>/corpus/<run_id>/<benchmark_uuid>/i-XXXX-<fuzzer-version>.zip`
 - Runner metrics (CPU/memory/load) are recorded in `runner_metrics.csv` inside each logs zip.
 
 `<run_id>` defaults to a unix timestamp captured once per Terraform state (via

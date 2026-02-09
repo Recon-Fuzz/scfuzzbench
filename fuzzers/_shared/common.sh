@@ -821,7 +821,8 @@ upload_results() {
   local log_zip="${upload_dir}/logs-${base_name}.zip"
   local prefix="${SCFUZZBENCH_RUN_ID}"
   if [[ -n "${SCFUZZBENCH_BENCHMARK_UUID}" ]]; then
-    prefix="${SCFUZZBENCH_BENCHMARK_UUID}/${SCFUZZBENCH_RUN_ID}"
+    # New layout: logs/<run_id>/<benchmark_uuid>/...
+    prefix="${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}"
   fi
 
   if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then

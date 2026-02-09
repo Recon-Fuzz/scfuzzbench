@@ -435,8 +435,8 @@ def main() -> int:
 
         base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
         analysis_base = f"{base_url}/analysis/{r.benchmark_uuid}/{r.run_id}"
-        logs_base = f"{base_url}/logs/{r.benchmark_uuid}/{r.run_id}"
-        corpus_base = f"{base_url}/corpus/{r.benchmark_uuid}/{r.run_id}"
+        logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
+        corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
         bundles_base = f"{analysis_base}/bundles"
         lines.append("- Analysis bundle: " + f"{bundles_base}/analysis.zip")
         lines.append("- Logs bundle: " + f"{bundles_base}/logs.zip")
@@ -487,8 +487,8 @@ def main() -> int:
                 lines.append(f"</details>")
                 lines.append("")
 
-            list_and_render(f"logs/{r.benchmark_uuid}/{r.run_id}/", "Raw logs (.zip)")
-            list_and_render(f"corpus/{r.benchmark_uuid}/{r.run_id}/", "Raw corpus (.zip)")
+            list_and_render(f"logs/{r.run_id}/{r.benchmark_uuid}/", "Raw logs (.zip)")
+            list_and_render(f"corpus/{r.run_id}/{r.benchmark_uuid}/", "Raw corpus (.zip)")
 
         write_text(run_dir / "index.md", "\n".join(lines).rstrip() + "\n")
 
@@ -497,4 +497,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -50,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--benchmark-uuid",
         default=None,
-        help="Benchmark UUID used in S3 prefixes (logs/<uuid>/<run_id>/...).",
+        help="Benchmark UUID used in S3 prefixes (logs/<run_id>/<uuid>/...). Falls back to logs/<uuid>/<run_id>/ for legacy runs.",
     )
     parser.add_argument(
         "--prefix",
@@ -71,15 +71,30 @@ def main() -> int:
     categories = ["logs", "corpus"] if args.category == "both" else [args.category]
     total = 0
     for category in categories:
+        prefixes: list[str]
         if args.prefix:
-            prefix = args.prefix.rstrip("/") + "/"
+            prefixes = [args.prefix.rstrip("/") + "/"]
         elif args.benchmark_uuid:
-            prefix = f"{category}/{args.benchmark_uuid}/{args.run_id}/"
+            # Prefer the current layout: <category>/<run_id>/<benchmark_uuid>/...
+            # Fallback to the legacy layout: <category>/<benchmark_uuid>/<run_id>/...
+            prefixes = [
+                f"{category}/{args.run_id}/{args.benchmark_uuid}/",
+                f"{category}/{args.benchmark_uuid}/{args.run_id}/",
+            ]
         else:
-            prefix = f"{category}/{args.run_id}/"
-        keys = list_keys(args.bucket, prefix, args.profile)
+            prefixes = [f"{category}/{args.run_id}/"]
+
+        prefix = prefixes[0]
+        keys: list[str] = []
+        for candidate in prefixes:
+            keys = list_keys(args.bucket, candidate, args.profile)
+            if keys:
+                prefix = candidate
+                break
+
         if not keys:
-            print(f"No {category} artifacts found under {prefix}.")
+            tried = ", ".join(prefixes)
+            print(f"No {category} artifacts found under: {tried}.")
             continue
         zip_dir = args.dest / category / "zips"
         unzip_dir = args.dest / category / "unzipped"
