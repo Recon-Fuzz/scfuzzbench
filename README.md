@@ -29,10 +29,12 @@ Artifacts:
   `s3://<bucket>/corpus/<benchmark_uuid>/<run_id>/i-XXXX-<fuzzer-version>.zip`
 - Runner metrics (CPU/memory/load) are recorded in `runner_metrics.csv` inside each logs zip.
 
-`<run_id>` defaults to the unix timestamp at apply time. `benchmark_uuid` is an
-MD5 of a manifest including the scfuzzbench commit, target repo/ref, benchmark
-type, instance type, and fuzzer versions; a `manifest.json` is uploaded
-alongside the logs.
+`<run_id>` defaults to a unix timestamp captured once per Terraform state (via
+`time_static`), so repeated `terraform apply` may reuse the same value. To force
+a fresh run ID, set `run_id` explicitly (for example `-var 'run_id=...'` or
+`TF_VAR_run_id=...`). `benchmark_uuid` is an MD5 of a manifest including the
+scfuzzbench commit, target repo/ref, benchmark type, instance type, and fuzzer
+versions; a `manifest.json` is uploaded alongside the logs.
 
 Benchmark type:
 - `benchmark_type` controls whether the run uses `property` (default) or
@@ -76,6 +78,23 @@ Per-fuzzer environment variables live in `fuzzers/README.md`.
 ```bash
 make terraform-init
 make terraform-deploy TF_ARGS="-var 'ssh_cidr=YOUR_IP/32' -var 'target_repo_url=REPO_URL' -var 'target_commit=COMMIT'"
+```
+
+## Re-run a benchmark
+
+Instances are one-shot: after `run.sh` completes they upload artifacts and stop
+themselves, and they will not automatically re-run on start (a bootstrap
+sentinel is written).
+
+To re-run with the same state and bucket:
+
+```bash
+# Pick a new run_id so the S3 prefix is unique.
+export TF_VAR_run_id="$(date +%s)"
+
+# Recreate the EC2 instances so user-data runs again.
+make terraform-destroy-infra TF_ARGS="-auto-approve -input=false"
+make terraform-deploy TF_ARGS="-auto-approve -input=false"
 ```
 
 Remote state (recommended for multi-machine runs):
@@ -130,7 +149,8 @@ make terraform-destroy-infra
 After downloading logs and unzip (single-pass analysis + charts):
 
 ```bash
-make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<benchmark_uuid> ARTIFACT_CATEGORY=both
+DEST="$(mktemp -d /tmp/scfuzzbench-analysis-1770053924-XXXXXX)"
+make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<benchmark_uuid> DEST="$DEST" ARTIFACT_CATEGORY=both
 ```
 
 If you reuse an existing bucket, set `EXISTING_BUCKET=<bucket-name>` so
@@ -142,6 +162,23 @@ make results-download BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<ben
 ```
 
 You can read `benchmark_uuid` (and `run_id`) from `terraform output`.
+
+If `analysis/events.csv` is empty, start by inspecting the raw fuzzer logs for
+early exits or CLI usage errors:
+
+```bash
+make results-inspect DEST="$DEST"
+rg -n \"error:|Usage:|cannot parse value\" \"$DEST/analysis-logs\" -S
+```
+
+If `make results-prepare` prints `Copied 0 log file(s)`, the fuzzers likely
+exited before they ever wrote `*.log`. In that case, check the EC2 console
+output for bootstrap errors (git auth, build failures, etc.):
+
+```bash
+aws ec2 get-console-output --instance-id i-0123456789abcdef0 --latest --output json \
+  | jq -r '.Output' | tail -n 200
+```
 
 ## GitHub Actions
 
@@ -176,3 +213,10 @@ make report-benchmark REPORT_CSV=results.csv REPORT_OUT_DIR=report_out REPORT_BU
 If you need to clone a private target repo, store a short-lived token in SSM
 and set `git_token_ssm_parameter_name` so the instances can fetch it without
 embedding secrets in user-data logs.
+
+Notes:
+- For public repos, leave `git_token_ssm_parameter_name` empty. If it is set,
+  the runner will still attempt an unauthenticated clone first and only use the
+  token if needed.
+- If you see `Invalid username or token` in console output and only
+  `runner_metrics.csv` uploads (no `*.log`), your SSM token value is invalid.

@@ -12,8 +12,12 @@ SCFUZZBENCH_PROPERTIES_PATH=${SCFUZZBENCH_PROPERTIES_PATH:-}
 SCFUZZBENCH_RUNNER_METRICS=${SCFUZZBENCH_RUNNER_METRICS:-1}
 SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS=${SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS:-5}
 
+SCFUZZBENCH_AWS_CREDS_ENV_FILE=${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}
+SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}
+
 log() {
-  echo "[$(date -Is)] $*"
+  # Use stderr so command substitutions can safely capture stdout.
+  echo "[$(date -Is)] $*" >&2
 }
 
 retry_cmd() {
@@ -299,6 +303,11 @@ finalize_run() {
 
 register_shutdown_trap() {
   install_shutdown_script
+  cache_instance_id || true
+  if [[ -z "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    cache_aws_creds_from_imds || true
+    start_aws_creds_refresher || true
+  fi
   start_runner_metrics
   trap finalize_run EXIT
 }
@@ -387,12 +396,210 @@ install_slither_analyzer() {
   command -v slither
 }
 
-get_instance_id() {
+imds_token() {
+  curl -fsS --connect-timeout 1 --max-time 2 \
+    -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true
+}
+
+imds_get() {
+  local path=$1
   local token
-  token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-  curl -s -H "X-aws-ec2-metadata-token: ${token}" \
-    http://169.254.169.254/latest/meta-data/instance-id
+  token=$(imds_token)
+  if [[ -z "${token}" ]]; then
+    return 1
+  fi
+  curl -fsS --connect-timeout 1 --max-time 2 \
+    -H "X-aws-ec2-metadata-token: ${token}" \
+    "http://169.254.169.254/latest/${path}" 2>/dev/null
+}
+
+get_instance_id() {
+  imds_get "meta-data/instance-id" || true
+}
+
+cache_instance_id() {
+  if [[ -n "${SCFUZZBENCH_INSTANCE_ID:-}" ]]; then
+    return 0
+  fi
+  local instance_id
+  instance_id=$(get_instance_id 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -n "${instance_id}" ]]; then
+    export SCFUZZBENCH_INSTANCE_ID="${instance_id}"
+    return 0
+  fi
+  instance_id=$(hostname 2>/dev/null || true)
+  if [[ -z "${instance_id}" ]]; then
+    instance_id="unknown"
+  fi
+  export SCFUZZBENCH_INSTANCE_ID="${instance_id}"
+  return 0
+}
+
+cache_aws_creds_from_imds() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    log "jq not found; skipping IMDS credential cache."
+    return 1
+  fi
+
+  local role_name
+  role_name=$(imds_get "meta-data/iam/security-credentials/" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -z "${role_name}" ]]; then
+    log "Could not fetch IAM role name from IMDS; skipping credential cache."
+    return 1
+  fi
+
+  local creds_json
+  creds_json=$(imds_get "meta-data/iam/security-credentials/${role_name}" 2>/dev/null || true)
+  if [[ -z "${creds_json}" ]]; then
+    log "Could not fetch IAM role credentials from IMDS; skipping credential cache."
+    return 1
+  fi
+
+  local access_key_id_sh
+  local secret_access_key_sh
+  local session_token_sh
+  local expiration_raw
+  local expiration_sh
+  access_key_id_sh=$(jq -r '.AccessKeyId // empty | @sh' <<<"${creds_json}")
+  secret_access_key_sh=$(jq -r '.SecretAccessKey // empty | @sh' <<<"${creds_json}")
+  session_token_sh=$(jq -r '.Token // empty | @sh' <<<"${creds_json}")
+  expiration_raw=$(jq -r '.Expiration // empty' <<<"${creds_json}")
+  expiration_sh=$(jq -r '.Expiration // empty | @sh' <<<"${creds_json}")
+  if [[ -z "${access_key_id_sh}" || -z "${secret_access_key_sh}" || -z "${session_token_sh}" ]]; then
+    log "IMDS returned incomplete IAM role credentials; skipping credential cache."
+    return 1
+  fi
+
+  local expiration_epoch=""
+  if [[ -n "${expiration_raw}" ]]; then
+    expiration_epoch=$(date -u -d "${expiration_raw}" +%s 2>/dev/null || true)
+  fi
+
+  local creds_file="${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}"
+  mkdir -p "$(dirname "${creds_file}")"
+  umask 077
+  local tmp_file
+  tmp_file=$(mktemp "${creds_file}.tmp.XXXXXX")
+  chmod 0600 "${tmp_file}"
+  {
+    echo "# Cached from IMDS. Used to keep S3/SSM uploads working during shutdown."
+    echo "AWS_ACCESS_KEY_ID=${access_key_id_sh}"
+    echo "AWS_SECRET_ACCESS_KEY=${secret_access_key_sh}"
+    echo "AWS_SESSION_TOKEN=${session_token_sh}"
+    if [[ -n "${expiration_sh}" ]]; then
+      echo "SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION=${expiration_sh}"
+    fi
+    if [[ -n "${expiration_epoch}" ]]; then
+      echo "SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH=${expiration_epoch}"
+    fi
+  } >"${tmp_file}"
+  mv -f "${tmp_file}" "${creds_file}"
+  return 0
+}
+
+load_cached_aws_creds() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 1
+  fi
+  local creds_file="${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}"
+  if [[ ! -f "${creds_file}" ]]; then
+    return 1
+  fi
+
+  local old_ak_set=0
+  local old_sk_set=0
+  local old_st_set=0
+  local old_exp_set=0
+  local old_exp_epoch_set=0
+  if [[ "${AWS_ACCESS_KEY_ID+x}" == "x" ]]; then old_ak_set=1; fi
+  if [[ "${AWS_SECRET_ACCESS_KEY+x}" == "x" ]]; then old_sk_set=1; fi
+  if [[ "${AWS_SESSION_TOKEN+x}" == "x" ]]; then old_st_set=1; fi
+  if [[ "${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION+x}" == "x" ]]; then old_exp_set=1; fi
+  if [[ "${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH+x}" == "x" ]]; then old_exp_epoch_set=1; fi
+  local old_ak="${AWS_ACCESS_KEY_ID-}"
+  local old_sk="${AWS_SECRET_ACCESS_KEY-}"
+  local old_st="${AWS_SESSION_TOKEN-}"
+  local old_exp="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION-}"
+  local old_exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH-}"
+
+  local ok=0
+  # shellcheck disable=SC1090
+  set -a
+  if source "${creds_file}"; then
+    ok=1
+  fi
+  set +a
+
+  if (( ok )); then
+    if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" || -z "${AWS_SESSION_TOKEN:-}" ]]; then
+      ok=0
+    fi
+    local exp_epoch="${SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH:-}"
+    if [[ -n "${exp_epoch}" && "${exp_epoch}" =~ ^[0-9]+$ ]]; then
+      local now
+      now=$(date -u +%s)
+      if (( exp_epoch <= now )); then
+        ok=0
+      fi
+    fi
+  fi
+
+  if (( ok )); then
+    return 0
+  fi
+
+  if (( old_ak_set )); then export AWS_ACCESS_KEY_ID="${old_ak}"; else unset AWS_ACCESS_KEY_ID; fi
+  if (( old_sk_set )); then export AWS_SECRET_ACCESS_KEY="${old_sk}"; else unset AWS_SECRET_ACCESS_KEY; fi
+  if (( old_st_set )); then export AWS_SESSION_TOKEN="${old_st}"; else unset AWS_SESSION_TOKEN; fi
+  if (( old_exp_set )); then export SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION="${old_exp}"; else unset SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION; fi
+  if (( old_exp_epoch_set )); then export SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH="${old_exp_epoch}"; else unset SCFUZZBENCH_CACHED_AWS_CREDS_EXPIRATION_EPOCH; fi
+  return 1
+}
+
+aws_cli() {
+  local have_cached=0
+  if [[ -z "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    if load_cached_aws_creds; then
+      have_cached=1
+    else
+      cache_aws_creds_from_imds >/dev/null 2>&1 || true
+      if load_cached_aws_creds >/dev/null 2>&1; then
+        have_cached=1
+      fi
+    fi
+  fi
+  if (( have_cached )); then
+    AWS_EC2_METADATA_DISABLED=true aws "$@"
+  else
+    aws "$@"
+  fi
+}
+
+start_aws_creds_refresher() {
+  if [[ -n "${SCFUZZBENCH_DISABLE_IMDS_CREDENTIAL_CACHE:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${SCFUZZBENCH_AWS_CREDS_REFRESH_PID:-}" ]] && kill -0 "${SCFUZZBENCH_AWS_CREDS_REFRESH_PID}" 2>/dev/null; then
+    return 0
+  fi
+
+  local interval="${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}"
+  if [[ ! "${interval}" =~ ^[0-9]+$ ]] || (( interval < 60 )); then
+    interval=300
+  fi
+
+  (
+    set +e
+    while true; do
+      cache_aws_creds_from_imds >/dev/null 2>&1 || true
+      sleep "${interval}" || true
+    done
+  ) &
+  export SCFUZZBENCH_AWS_CREDS_REFRESH_PID=$!
 }
 
 get_github_token() {
@@ -401,7 +608,7 @@ get_github_token() {
     return 0
   fi
   if [[ -n "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER:-}" ]]; then
-    aws ssm get-parameter --with-decryption --name "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER}" \
+    retry_cmd 5 10 aws_cli ssm get-parameter --with-decryption --name "${SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER}" \
       --query 'Parameter.Value' --output text
     return 0
   fi
@@ -412,49 +619,98 @@ clone_target() {
   require_env SCFUZZBENCH_REPO_URL SCFUZZBENCH_COMMIT
   local repo_dir="${SCFUZZBENCH_WORKDIR}/target"
   local git_token=""
-  git_token=$(get_github_token 2>/dev/null || true)
+  local token_loaded=0
+
+  get_git_token_cached() {
+    if (( token_loaded )); then
+      printf '%s' "${git_token}"
+      return 0
+    fi
+    token_loaded=1
+    git_token=$(get_github_token 2>/dev/null || true)
+    printf '%s' "${git_token}"
+  }
+
+  token_clone_url() {
+    local token
+    token=$(get_git_token_cached)
+    if [[ -z "${token}" ]]; then
+      return 1
+    fi
+    if [[ "${SCFUZZBENCH_REPO_URL}" != https://* ]]; then
+      return 1
+    fi
+    printf '%s' "https://x-access-token:${token}@${SCFUZZBENCH_REPO_URL#https://}"
+    return 0
+  }
+
   if [[ ! -d "${repo_dir}/.git" ]]; then
-    if [[ -n "${git_token}" ]]; then
+    rm -rf "${repo_dir}" || true
+    log "Cloning ${SCFUZZBENCH_REPO_URL}"
+    if ! GIT_TERMINAL_PROMPT=0 git clone "${SCFUZZBENCH_REPO_URL}" "${repo_dir}"; then
       local clone_url
-      if [[ "${SCFUZZBENCH_REPO_URL}" == https://* ]]; then
-        clone_url="https://x-access-token:${git_token}@${SCFUZZBENCH_REPO_URL#https://}"
+      if clone_url=$(token_clone_url); then
+        log "Unauthenticated clone failed; retrying with GitHub token."
+        rm -rf "${repo_dir}" || true
+        GIT_TERMINAL_PROMPT=0 git clone "${clone_url}" "${repo_dir}"
+        git -C "${repo_dir}" remote set-url origin "${clone_url}"
       else
-        clone_url="${SCFUZZBENCH_REPO_URL}"
+        log "Clone failed and no GitHub token is available."
+        return 1
       fi
-      log "Cloning ${SCFUZZBENCH_REPO_URL} with GitHub token"
-      GIT_TERMINAL_PROMPT=0 git clone "${clone_url}" "${repo_dir}"
-      git -C "${repo_dir}" remote set-url origin "${clone_url}"
-    else
-      log "Cloning ${SCFUZZBENCH_REPO_URL}"
-      git clone "${SCFUZZBENCH_REPO_URL}" "${repo_dir}"
     fi
   fi
+
   pushd "${repo_dir}" >/dev/null
-  if [[ -n "${git_token}" ]]; then
-    GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
-  else
-    git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
+
+  if ! GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"; then
+    # If origin is currently using a bad/expired token, public repos should still work without it.
+    log "Fetch failed; retrying with public origin URL."
+    git remote set-url origin "${SCFUZZBENCH_REPO_URL}" || true
+    if ! GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"; then
+      local clone_url
+      if clone_url=$(token_clone_url); then
+        log "Fetch failed; retrying with GitHub token."
+        git remote set-url origin "${clone_url}"
+        GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin "${SCFUZZBENCH_COMMIT}"
+      else
+        log "Fetch failed and no GitHub token is available."
+        return 1
+      fi
+    fi
   fi
+
   git checkout "${SCFUZZBENCH_COMMIT}"
+
   if [[ -f .gitmodules ]]; then
     log "Initializing git submodules"
-    if [[ -n "${git_token}" ]]; then
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "https://github.com/"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "git@github.com:"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "ssh://git@github.com/"
-      git config --local --add url."https://x-access-token:${git_token}@github.com/".insteadOf "git://github.com/"
-      sed -i \
-        -e 's#git@github.com:#https://github.com/#g' \
-        -e 's#ssh://git@github.com/#https://github.com/#g' \
-        -e 's#git://github.com/#https://github.com/#g' \
-        .gitmodules
+
+    # Normalize SSH/git URLs to https so public submodules don't require SSH keys.
+    sed -i \
+      -e 's#git@github.com:#https://github.com/#g' \
+      -e 's#ssh://git@github.com/#https://github.com/#g' \
+      -e 's#git://github.com/#https://github.com/#g' \
+      .gitmodules || true
+    git submodule sync --recursive || true
+
+    if ! GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; then
+      local token
+      token=$(get_git_token_cached)
+      if [[ -z "${token}" ]]; then
+        log "Submodule init failed and no GitHub token is available."
+        return 1
+      fi
+      log "Submodule init failed; retrying with GitHub token."
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "https://github.com/"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "git@github.com:"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "ssh://git@github.com/"
+      git config --local --add url."https://x-access-token:${token}@github.com/".insteadOf "git://github.com/"
       git submodule sync --recursive
-      GIT_TERMINAL_PROMPT=0 git -c url."https://x-access-token:${git_token}@github.com/".insteadOf="https://github.com/" \
+      GIT_TERMINAL_PROMPT=0 git -c url."https://x-access-token:${token}@github.com/".insteadOf="https://github.com/" \
         submodule update --init --recursive
-    else
-      git submodule update --init --recursive
     fi
   fi
+
   popd >/dev/null
 }
 
@@ -557,8 +813,8 @@ run_with_timeout() {
 upload_results() {
   require_env SCFUZZBENCH_S3_BUCKET SCFUZZBENCH_RUN_ID SCFUZZBENCH_FUZZER_LABEL
   stop_runner_metrics || true
-  local instance_id
-  instance_id=$(get_instance_id)
+  cache_instance_id || true
+  local instance_id="${SCFUZZBENCH_INSTANCE_ID:-unknown}"
   local base_name="${instance_id}-${SCFUZZBENCH_FUZZER_LABEL}"
   local upload_dir="${SCFUZZBENCH_ROOT}/upload"
   mkdir -p "${upload_dir}"
@@ -567,6 +823,13 @@ upload_results() {
   if [[ -n "${SCFUZZBENCH_BENCHMARK_UUID}" ]]; then
     prefix="${SCFUZZBENCH_BENCHMARK_UUID}/${SCFUZZBENCH_RUN_ID}"
   fi
+
+  if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then
+    local manifest_path="${upload_dir}/benchmark_manifest.json"
+    echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
+    retry_cmd 5 60 aws_cli s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
+  fi
+
   local log_dest="s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/${base_name}.zip"
   if [[ -d "${SCFUZZBENCH_LOG_DIR}" ]]; then
     log "Zipping logs to ${log_zip}"
@@ -576,12 +839,7 @@ upload_results() {
     log_base=$(basename "${SCFUZZBENCH_LOG_DIR}")
     (cd "${log_parent}" && zip -r -q "${log_zip}" "${log_base}")
     log "Uploading logs to ${log_dest}"
-    retry_cmd 5 60 aws s3 cp "${log_zip}" "${log_dest}" --no-progress
-    if [[ -n "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" ]]; then
-      local manifest_path="${upload_dir}/benchmark_manifest.json"
-      echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
-      retry_cmd 5 60 aws s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
-    fi
+    retry_cmd 5 60 aws_cli s3 cp "${log_zip}" "${log_dest}" --no-progress
   else
     log "No logs directory found; skipping log upload."
   fi
@@ -596,7 +854,7 @@ upload_results() {
     corpus_base=$(basename "${SCFUZZBENCH_CORPUS_DIR}")
     (cd "${corpus_parent}" && zip -r -q "${corpus_zip}" "${corpus_base}")
     log "Uploading corpus to ${corpus_dest}"
-    retry_cmd 5 60 aws s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
+    retry_cmd 5 60 aws_cli s3 cp "${corpus_zip}" "${corpus_dest}" --no-progress
   else
     log "No corpus directory configured or found; skipping corpus upload."
   fi
