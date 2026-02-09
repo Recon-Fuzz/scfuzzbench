@@ -33,7 +33,8 @@ jobs:
           set -euo pipefail
           url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
           curl -fsSL "${url}" -o repo.tar.gz
-          topdir="$(tar -tzf repo.tar.gz | head -n 1 | cut -d/ -f1)"
+          # Avoid SIGPIPE failures from `head` when pipefail is set.
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
           tar -xzf repo.tar.gz
           shopt -s dotglob
           mv "${topdir}"/* .
