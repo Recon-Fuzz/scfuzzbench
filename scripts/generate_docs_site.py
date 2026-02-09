@@ -223,76 +223,49 @@ def main() -> int:
         dir_name_re=re.compile(r"^[0-9a-f]{32}$"),
     )
 
-    # Home page: latest complete run + recent list.
-    latest = complete_runs[0] if complete_runs else None
-    home_lines: list[str] = []
-    home_lines.append("---")
-    home_lines.append("layout: home")
-    home_lines.append("hero:")
-    home_lines.append("  name: scfuzzbench")
-    home_lines.append("  text: Smart-contract fuzzer benchmarks")
-    home_lines.append("  tagline: Fully static reports generated in CI from S3 run artifacts.")
-    home_lines.append("  actions:")
-    home_lines.append("    - theme: brand")
-    home_lines.append("      text: Browse runs")
-    home_lines.append("      link: /runs/")
-    home_lines.append("    - theme: alt")
-    home_lines.append("      text: Ops notes")
-    home_lines.append("      link: /ops")
-    home_lines.append("features:")
-    home_lines.append("  - title: Timestamp-first runs")
-    home_lines.append("    details: Run IDs are Unix timestamps, so the latest run is always obvious when listing prefixes.")
-    home_lines.append("  - title: Complete runs only")
-    home_lines.append("    details: The site lists only complete runs (timeout plus a 1h grace period) to avoid partial results.")
-    home_lines.append("  - title: Triage-friendly")
-    home_lines.append("    details: Complete runs missing analysis stay visible with warnings and raw-artifact links.")
-    home_lines.append("---")
-    home_lines.append("")
-    home_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
-    home_lines.append("")
-    home_lines.append("::: tip Completeness rule")
-    home_lines.append("The site lists **only complete runs** (timeout + 1h grace).")
-    home_lines.append("Complete runs missing analysis are kept visible with warnings for later triage.")
-    home_lines.append(":::")
-    home_lines.append("")
-
-    if latest:
-        home_lines.append("## Latest complete run")
-        home_lines.append("")
-        home_lines.append(f"- Run: [`{latest.run_id}`](/runs/{latest.run_id}/{latest.benchmark_uuid}/)")
-        home_lines.append(f"- Date (UTC): `{utc_ts(latest.run_id)}`")
-        home_lines.append(f"- Benchmark: [`{latest.benchmark_uuid}`](/benchmarks/{latest.benchmark_uuid}/)")
-        home_lines.append("")
+    # Landing page: show the runs list directly (this is not a "product" site).
+    index_lines: list[str] = []
+    index_lines.append("# Runs")
+    index_lines.append("")
+    index_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
+    index_lines.append("")
+    index_lines.append("::: tip")
+    index_lines.append("Only **complete** runs are shown (timeout + 1h grace).")
+    index_lines.append("")
+    index_lines.append("If a run is complete but shows **Missing analysis**, it means publishing did not complete.")
+    index_lines.append("See [Ops notes](/ops).")
+    index_lines.append(":::")
+    index_lines.append("")
+    if not complete_runs:
+        index_lines.append("_No complete runs found in the S3 run index._")
+        index_lines.append("")
     else:
-        home_lines.append("## Latest complete run")
-        home_lines.append("")
-        home_lines.append("_No complete runs found in the S3 run index._")
-        home_lines.append("")
-
-    home_lines.append("## Recent complete runs")
-    home_lines.append("")
-    recent = complete_runs[: max(0, int(args.recent))]
-    if not recent:
-        home_lines.append("_No complete runs found._")
-    else:
-        home_lines.append("| Run ID | Date (UTC) | Benchmark | Status |")
-        home_lines.append("|---|---|---|---|")
-        for r in recent:
+        index_lines.append("| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout | Status |")
+        index_lines.append("|---|---|---|---|---|---:|---|")
+        for r in complete_runs:
+            m = r.manifest
+            repo = str(m.get("target_repo_url", "")).strip()
+            commit = str(m.get("target_commit", "")).strip()
+            commit_short = commit[:10] if commit else ""
+            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
             status = analysis_status(r)
-            home_lines.append(
+            index_lines.append(
                 "| "
                 + " | ".join(
                     [
                         f"[`{r.run_id}`](/runs/{r.run_id}/{r.benchmark_uuid}/)",
                         f"`{utc_ts(r.run_id)}`",
                         f"[`{r.benchmark_uuid}`](/benchmarks/{r.benchmark_uuid}/)",
+                        target_cell,
+                        f"`{commit_short}`" if commit_short else "",
+                        f"{r.timeout_hours:g}h",
                         status,
                     ]
                 )
                 + " |"
             )
-    home_lines.append("")
-    write_text(docs_dir / "index.md", "\n".join(home_lines).rstrip() + "\n")
+        index_lines.append("")
+    write_text(docs_dir / "index.md", "\n".join(index_lines).rstrip() + "\n")
 
     # Runs index page.
     runs_lines: list[str] = []
