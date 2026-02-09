@@ -9,11 +9,12 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 
 
-RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\\.json$")
+RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
 
 
 def aws_env(profile: str | None) -> dict:
@@ -136,6 +137,7 @@ def main() -> int:
 
     # Discover manifests via the timestamp-first run index.
     keys = list_keys(bucket, "runs/", profile=profile)
+    print(f"Discovered {len(keys)} S3 keys under runs/")
     candidates: list[tuple[int, str, str]] = []
     for key in keys:
         m = RUN_MANIFEST_RE.match(key)
@@ -144,6 +146,13 @@ def main() -> int:
         run_id = int(m.group(1))
         benchmark_uuid = m.group(2)
         candidates.append((run_id, benchmark_uuid, key))
+
+    if keys and not candidates:
+        print(
+            "WARNING: Found S3 keys under runs/ but none matched the manifest pattern. "
+            "This usually means the manifest regex is wrong.",
+            file=sys.stderr,
+        )
 
     # Load manifests + filter complete runs.
     complete_runs: list[Run] = []
