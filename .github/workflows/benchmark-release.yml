@@ -32,7 +32,7 @@ jobs:
       has_runs: ${{ steps.discover.outputs.has_runs }}
       matrix: ${{ steps.discover.outputs.matrix }}
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
     steps:
       - name: Ensure AWS credentials are configured
@@ -72,18 +72,18 @@ jobs:
               exit 1
             fi
             matrix=$(python3 - <<'PY'
-import json
-import os
+          import json
+          import os
 
-entry = {
-    "benchmark_uuid": os.environ["BENCHMARK_UUID"],
-    "run_id": os.environ["RUN_ID"],
-}
-report_budget = os.environ.get("REPORT_BUDGET_HOURS", "").strip()
-if report_budget:
-    entry["report_budget_hours"] = report_budget
-print(json.dumps({"include": [entry]}, separators=(",", ":")))
-PY
+          entry = {
+              "benchmark_uuid": os.environ["BENCHMARK_UUID"],
+              "run_id": os.environ["RUN_ID"],
+          }
+          report_budget = os.environ.get("REPORT_BUDGET_HOURS", "").strip()
+          if report_budget:
+              entry["report_budget_hours"] = report_budget
+          print(json.dumps({"include": [entry]}, separators=(",", ":")))
+          PY
             )
             echo "has_runs=true" >> "${GITHUB_OUTPUT}"
             echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
@@ -91,71 +91,71 @@ PY
           fi
 
           matrix=$(python3 - <<'PY'
-import json
-import os
-import subprocess
-import time
+          import json
+          import os
+          import subprocess
+          import time
 
-bucket = os.environ["SCFUZZBENCH_BUCKET"]
-grace = int(os.environ.get("GRACE_SECONDS", "3600"))
-now = int(time.time())
+          bucket = os.environ["SCFUZZBENCH_BUCKET"]
+          grace = int(os.environ.get("GRACE_SECONDS", "3600"))
+          now = int(time.time())
 
-def aws(*args: str) -> str:
-    return subprocess.check_output(["aws", *args], text=True)
+          def aws(*args: str) -> str:
+              return subprocess.check_output(["aws", *args], text=True)
 
-def list_prefixes(prefix: str) -> list[str]:
-    data = json.loads(
-        aws(
-            "s3api",
-            "list-objects-v2",
-            "--bucket",
-            bucket,
-            "--prefix",
-            prefix,
-            "--delimiter",
-            "/",
-            "--output",
-            "json",
-        )
-    )
-    return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
+          def list_prefixes(prefix: str) -> list[str]:
+              data = json.loads(
+                  aws(
+                      "s3api",
+                      "list-objects-v2",
+                      "--bucket",
+                      bucket,
+                      "--prefix",
+                      prefix,
+                      "--delimiter",
+                      "/",
+                      "--output",
+                      "json",
+                  )
+              )
+              return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
 
-runs: list[dict] = []
-for run_prefix in list_prefixes("logs/"):
-    parts = run_prefix.strip("/").split("/")
-    if len(parts) < 2:
-        continue
-    run_id = parts[1]
-    for bench_prefix in list_prefixes(f"logs/{run_id}/"):
-        bench_parts = bench_prefix.strip("/").split("/")
-        if len(bench_parts) < 3:
-            continue
-        benchmark_uuid = bench_parts[2]
-        manifest_key = f"logs/{run_id}/{benchmark_uuid}/manifest.json"
-        try:
-            manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
-            manifest = json.loads(manifest_raw)
-        except Exception:
-            continue
-        try:
-            timeout_hours = float(manifest.get("timeout_hours", 24))
-        except Exception:
-            timeout_hours = 24.0
-        try:
-            run_start = int(run_id)
-        except ValueError:
-            continue
-        if now >= run_start + int(timeout_hours * 3600) + grace:
-            runs.append(
-                {
-                    "benchmark_uuid": benchmark_uuid,
-                    "run_id": run_id,
-                    "timeout_hours": timeout_hours,
-                }
-            )
+          runs: list[dict] = []
+          for run_prefix in list_prefixes("logs/"):
+              parts = run_prefix.strip("/").split("/")
+              if len(parts) < 2:
+                  continue
+              run_id = parts[1]
+              for bench_prefix in list_prefixes(f"logs/{run_id}/"):
+                  bench_parts = bench_prefix.strip("/").split("/")
+                  if len(bench_parts) < 3:
+                      continue
+                  benchmark_uuid = bench_parts[2]
+                  manifest_key = f"logs/{run_id}/{benchmark_uuid}/manifest.json"
+                  try:
+                      manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
+                      manifest = json.loads(manifest_raw)
+                  except Exception:
+                      continue
+                  try:
+                      timeout_hours = float(manifest.get("timeout_hours", 24))
+                  except Exception:
+                      timeout_hours = 24.0
+                  try:
+                      run_start = int(run_id)
+                  except ValueError:
+                      continue
+                  if now >= run_start + int(timeout_hours * 3600) + grace:
+                      runs.append(
+                          {
+                              "benchmark_uuid": benchmark_uuid,
+                              "run_id": run_id,
+                              "timeout_hours": timeout_hours,
+                          }
+                      )
 
-print(json.dumps({"include": runs}, separators=(",", ":")))
-PY
+          print(json.dumps({"include": runs}, separators=(",", ":")))
+          PY
           )
 
           if [[ "${matrix}" == '{"include":[]}' ]]; then
@@ -173,11 +173,23 @@ PY
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
 
       - name: Configure AWS credentials (keys)
         uses: aws-actions/configure-aws-credentials@v4
@@ -226,16 +238,16 @@ PY
           timeout_hours="${{ matrix.timeout_hours }}"
           if [[ -z "${timeout_hours}" || "${timeout_hours}" == "null" ]]; then
             timeout_hours=$(ANALYSIS_DIR="${analysis_dir}" python3 - <<'PY'
-import json
-import os
-from pathlib import Path
+          import json
+          import os
+          from pathlib import Path
 
-manifest_path = Path(os.environ["ANALYSIS_DIR"]) / "manifest.json"
-manifest = json.loads(manifest_path.read_text())
-value = manifest.get("timeout_hours", 24)
-print(value)
-PY
-)
+          manifest_path = Path(os.environ["ANALYSIS_DIR"]) / "manifest.json"
+          manifest = json.loads(manifest_path.read_text())
+          value = manifest.get("timeout_hours", 24)
+          print(value)
+          PY
+            )
           fi
 
           report_budget="${REPORT_BUDGET_HOURS}"

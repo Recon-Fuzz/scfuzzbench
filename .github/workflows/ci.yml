@@ -11,6 +11,36 @@ permissions:
   contents: read
 
 jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+
+      - name: Lint GitHub Actions workflows
+        run: |
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+
   terraform:
     runs-on: ubuntu-latest
     steps:

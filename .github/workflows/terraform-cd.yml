@@ -31,8 +31,20 @@ jobs:
     env:
       AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -47,7 +59,6 @@ jobs:
           fi
 
       - name: Configure AWS credentials (keys)
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -55,11 +66,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Write backend config from secret
-        if: ${{ secrets.TF_BACKEND_CONFIG != '' }}
+        env:
+          TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
         run: |
-          cat > infrastructure/backend.hcl <<'EOF'
-          ${{ secrets.TF_BACKEND_CONFIG }}
-          EOF
+          set -euo pipefail
+          if [ -n "${TF_BACKEND_CONFIG}" ]; then
+            printf '%s' "${TF_BACKEND_CONFIG}" > infrastructure/backend.hcl
+          fi
 
       - name: Ensure backend config exists
         run: |

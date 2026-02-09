@@ -75,11 +75,23 @@ jobs:
   benchmark-run:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -109,11 +121,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Write backend config from secret
-        if: ${{ secrets.TF_BACKEND_CONFIG != '' }}
+        env:
+          TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
         run: |
-          cat > infrastructure/backend.hcl <<'EOF'
-          ${{ secrets.TF_BACKEND_CONFIG }}
-          EOF
+          set -euo pipefail
+          if [ -n "${TF_BACKEND_CONFIG}" ]; then
+            printf '%s' "${TF_BACKEND_CONFIG}" > infrastructure/backend.hcl
+          fi
 
       - name: Ensure backend config exists
         run: |
@@ -170,18 +184,18 @@ jobs:
 
           if [[ -n "${FUZZER_ENV_JSON}" || -n "${PROPERTIES_PATH}" ]]; then
             merged=$(python3 - <<'PY'
-import json
-import os
+          import json
+          import os
 
-data = {}
-raw = os.environ.get("FUZZER_ENV_JSON", "").strip()
-if raw:
-    data.update(json.loads(raw))
-prop = os.environ.get("PROPERTIES_PATH", "").strip()
-if prop:
-    data["SCFUZZBENCH_PROPERTIES_PATH"] = prop
-print(json.dumps(data))
-PY
+          data = {}
+          raw = os.environ.get("FUZZER_ENV_JSON", "").strip()
+          if raw:
+              data.update(json.loads(raw))
+          prop = os.environ.get("PROPERTIES_PATH", "").strip()
+          if prop:
+              data["SCFUZZBENCH_PROPERTIES_PATH"] = prop
+          print(json.dumps(data))
+          PY
             )
             tf_args+=(-var "fuzzer_env=${merged}")
           fi
