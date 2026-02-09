@@ -26,6 +26,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        timeout-minutes: 5
+        with:
+          fetch-depth: 1
 
       - name: Ensure AWS configuration is present
         run: |
@@ -61,6 +64,12 @@ jobs:
 
       - name: Build site
         run: mkdocs build
+
+      - name: Ensure CNAME is included
+        run: |
+          if [ -f docs/CNAME ]; then
+            cp docs/CNAME site/CNAME
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
