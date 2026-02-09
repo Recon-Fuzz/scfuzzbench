@@ -255,10 +255,12 @@ jobs:
             report_budget="${timeout_hours}"
           fi
 
-          echo "timeout_hours=${timeout_hours}" >> "${GITHUB_OUTPUT}"
-          echo "report_budget_hours=${report_budget}" >> "${GITHUB_OUTPUT}"
-          echo "dest_root=${dest_root}" >> "${GITHUB_OUTPUT}"
-          echo "analysis_dir=${analysis_dir}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "timeout_hours=${timeout_hours}"
+            echo "report_budget_hours=${report_budget}"
+            echo "dest_root=${dest_root}"
+            echo "analysis_dir=${analysis_dir}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Run analysis
         if: ${{ steps.release_check.outputs.exists != 'true' }}

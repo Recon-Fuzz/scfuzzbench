@@ -210,9 +210,11 @@ jobs:
           bucket=$(jq -r '.bucket_name.value' run_metadata.json)
           run_id=$(jq -r '.run_id.value' run_metadata.json)
           benchmark_uuid=$(jq -r '.benchmark_uuid.value' run_metadata.json)
-          echo "bucket_name=${bucket}" >> "${GITHUB_OUTPUT}"
-          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
-          echo "benchmark_uuid=${benchmark_uuid}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "bucket_name=${bucket}"
+            echo "run_id=${run_id}"
+            echo "benchmark_uuid=${benchmark_uuid}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Upload run metadata
         uses: actions/upload-artifact@v4
