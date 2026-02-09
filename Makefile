@@ -16,8 +16,9 @@ EXISTING_BUCKET ?=
 DEST ?= /tmp/scfuzzbench-results-$(RUN_ID)
 ARTIFACT_CATEGORY ?= logs
 UNZIPPED_DIR ?= $(DEST)/logs/unzipped
-ANALYSIS_LOGS_DIR ?= $(DEST)/analysis-logs
-ANALYSIS_OUT_DIR ?= $(DEST)/analysis
+ANALYSIS_LOGS_DIR ?= $(DEST)/analysis
+ANALYSIS_OUT_DIR ?= $(DEST)/data
+IMAGES_OUT_DIR ?= $(DEST)/images
 EXCLUDE_FUZZERS ?=
 DURATION_HOURS ?=
 SHOW_MEAN ?=
@@ -119,7 +120,7 @@ s3-purge-versions:
 	python3 scripts/purge_s3_versions.py --bucket $(BUCKET) $(PROFILE_ARG)
 
 report-benchmark: analysis-venv
-	$(ANALYSIS_PY) analysis/benchmark_report.py --csv $(REPORT_CSV) --outdir $(REPORT_OUT_DIR) $(REPORT_BUDGET_ARG) --grid_step_min $(REPORT_GRID_STEP_MIN) --checkpoints $(REPORT_CHECKPOINTS) --ks $(REPORT_KS) $(if $(REPORT_ANONYMIZE),--anonymize,)
+	$(ANALYSIS_PY) analysis/benchmark_report.py --csv $(REPORT_CSV) --report-outdir $(REPORT_OUT_DIR) --images-outdir $(IMAGES_OUT_DIR) $(REPORT_BUDGET_ARG) --grid_step_min $(REPORT_GRID_STEP_MIN) --checkpoints $(REPORT_CHECKPOINTS) --ks $(REPORT_KS) $(if $(REPORT_ANONYMIZE),--anonymize,)
 
 report-wide-to-long: analysis-venv
 	$(ANALYSIS_PY) analysis/wide_to_long.py --wide_csv $(WIDE_CSV) --out_csv $(LONG_CSV)

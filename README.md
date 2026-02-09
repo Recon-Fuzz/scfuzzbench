@@ -153,6 +153,11 @@ DEST="$(mktemp -d /tmp/scfuzzbench-analysis-1770053924-XXXXXX)"
 make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<benchmark_uuid> DEST="$DEST" ARTIFACT_CATEGORY=both
 ```
 
+Outputs under `DEST`:
+- Prepared per-instance logs: `analysis/`
+- CSVs: `data/`
+- Plots: `images/`
+
 If you reuse an existing bucket, set `EXISTING_BUCKET=<bucket-name>` so
 Terraform uses `existing_bucket_name`. To download artifacts from the new
 layout, pass the benchmark UUID:
@@ -163,12 +168,12 @@ make results-download BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<ben
 
 You can read `benchmark_uuid` (and `run_id`) from `terraform output`.
 
-If `analysis/events.csv` is empty, start by inspecting the raw fuzzer logs for
+If `data/events.csv` is empty, start by inspecting the raw fuzzer logs for
 early exits or CLI usage errors:
 
 ```bash
 make results-inspect DEST="$DEST"
-rg -n \"error:|Usage:|cannot parse value\" \"$DEST/analysis-logs\" -S
+rg -n \"error:|Usage:|cannot parse value\" \"$DEST/analysis\" -S
 ```
 
 If `make results-prepare` prints `Copied 0 log file(s)`, the fuzzers likely

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -504,13 +505,24 @@ def write_placeholder_plot(title: str, outpath: Path, message: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=Path, required=True)
-    parser.add_argument("--outdir", type=Path, required=True)
+    # Backwards-compatible output selection:
+    # - If --outdir is provided, it is used for both the report and images.
+    # - Otherwise, callers can split outputs via --report-outdir and --images-outdir.
+    parser.add_argument("--outdir", type=Path, default=None)
+    parser.add_argument("--report-outdir", type=Path, default=None)
+    parser.add_argument("--images-outdir", type=Path, default=None)
     parser.add_argument("--budget", type=float, default=None)
     parser.add_argument("--grid_step_min", type=float, default=6.0)
     parser.add_argument("--checkpoints", type=str, default="1,4,8,24")
     parser.add_argument("--ks", type=str, default="1,3,5")
     parser.add_argument("--anonymize", action="store_true", help="Use generic fuzzer labels in plots.")
     args = parser.parse_args()
+
+    report_outdir = args.report_outdir or args.outdir
+    images_outdir = args.images_outdir or args.outdir
+    if report_outdir is None or images_outdir is None:
+        print("error: provide --outdir or both --report-outdir and --images-outdir", file=sys.stderr)
+        return 2
 
     df = load_csv(args.csv)
     validate_monotonic(df)
@@ -535,24 +547,36 @@ def main() -> int:
     step_h = float(args.grid_step_min) / 60.0
     grid = np.arange(0.0, budget + 1e-9, step_h)
 
-    outdir = args.outdir
-    outdir.mkdir(parents=True, exist_ok=True)
+    report_outdir.mkdir(parents=True, exist_ok=True)
+    images_outdir.mkdir(parents=True, exist_ok=True)
 
     if df.empty:
         write_no_data_report(
             budget=budget,
             checkpoints=checkpoints,
             ks=ks,
-            outpath=outdir / "REPORT.md",
+            outpath=report_outdir / "REPORT.md",
             csv_path=args.csv,
         )
         msg = "No rows in input CSV. This usually means no bugs were found (or parsing produced no events)."
-        write_placeholder_plot("Bugs found over time (median + IQR)", outdir / "bugs_over_time.png", msg)
-        write_placeholder_plot("Bugs found over time (all runs + median)", outdir / "bugs_over_time_runs.png", msg)
-        write_placeholder_plot("Median time-to-k", outdir / "time_to_k.png", msg)
-        write_placeholder_plot("End-of-budget bug count distribution (per run)", outdir / "final_distribution.png", msg)
-        write_placeholder_plot("Plateau time and late discovery share", outdir / "plateau_and_late_share.png", msg)
-        print(f"wrote: {outdir / 'REPORT.md'} (no data)")
+        write_placeholder_plot(
+            "Bugs found over time (median + IQR)", images_outdir / "bugs_over_time.png", msg
+        )
+        write_placeholder_plot(
+            "Bugs found over time (all runs + median)", images_outdir / "bugs_over_time_runs.png", msg
+        )
+        write_placeholder_plot("Median time-to-k", images_outdir / "time_to_k.png", msg)
+        write_placeholder_plot(
+            "End-of-budget bug count distribution (per run)",
+            images_outdir / "final_distribution.png",
+            msg,
+        )
+        write_placeholder_plot(
+            "Plateau time and late discovery share",
+            images_outdir / "plateau_and_late_share.png",
+            msg,
+        )
+        print(f"wrote: {report_outdir / 'REPORT.md'} (no data)")
         return 0
 
     df_grid = resample_to_grid(df, grid)
@@ -564,14 +588,14 @@ def main() -> int:
         fuzzers = sorted({str(f) for f in df_grid["fuzzer"].unique()})
         label_map = {fz: f"Fuzzer {chr(65 + idx)}" for idx, fz in enumerate(fuzzers)}
 
-    plot_bugs_over_time(df_grid, outdir / "bugs_over_time.png", label_map)
-    plot_bugs_over_time_runs(df_grid, outdir / "bugs_over_time_runs.png", label_map)
-    plot_time_to_k(metrics, ks=ks, outpath=outdir / "time_to_k.png", label_map=label_map)
-    plot_final_distribution(df_grid, outdir / "final_distribution.png", label_map)
-    plot_plateau_and_late_share(metrics, outdir / "plateau_and_late_share.png", label_map)
-    write_report(metrics, budget=budget, checkpoints=checkpoints, ks=ks, outpath=outdir / "REPORT.md")
+    plot_bugs_over_time(df_grid, images_outdir / "bugs_over_time.png", label_map)
+    plot_bugs_over_time_runs(df_grid, images_outdir / "bugs_over_time_runs.png", label_map)
+    plot_time_to_k(metrics, ks=ks, outpath=images_outdir / "time_to_k.png", label_map=label_map)
+    plot_final_distribution(df_grid, images_outdir / "final_distribution.png", label_map)
+    plot_plateau_and_late_share(metrics, images_outdir / "plateau_and_late_share.png", label_map)
+    write_report(metrics, budget=budget, checkpoints=checkpoints, ks=ks, outpath=report_outdir / "REPORT.md")
 
-    print(f"wrote: {outdir / 'REPORT.md'}")
+    print(f"wrote: {report_outdir / 'REPORT.md'}")
     print(
         "plots: bugs_over_time.png, bugs_over_time_runs.png, time_to_k.png, "
         "final_distribution.png, plateau_and_late_share.png"
