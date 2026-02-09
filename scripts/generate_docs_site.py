@@ -230,9 +230,13 @@ def main() -> int:
         dir_name_re=re.compile(r"^[0-9a-f]{32}$"),
     )
 
-    # Landing page: show the runs list directly (this is not a "product" site).
+    # Landing page: show the latest run (timestamp-first) directly.
     index_lines: list[str] = []
-    index_lines.append("# Runs")
+    index_lines.append("---")
+    index_lines.append("aside: false")
+    index_lines.append("---")
+    index_lines.append("")
+    index_lines.append("# Latest Run")
     index_lines.append("")
     index_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
     index_lines.append("")
@@ -247,13 +251,93 @@ def main() -> int:
         index_lines.append("_No complete runs found in the S3 run index._")
         index_lines.append("")
     else:
+        latest_run_id = complete_runs[0].run_id
+        latest_runs = [r for r in complete_runs if r.run_id == latest_run_id]
+        latest_runs.sort(key=lambda r: r.benchmark_uuid)
+
+        index_lines.append(f"Run ID: [`{latest_run_id}`](/runs/{latest_run_id}/)")
+        index_lines.append(f"Date (UTC): `{utc_ts(latest_run_id)}`")
+        index_lines.append("")
+        index_lines.append("| Benchmark | Details | Target | Commit | Timeout | Status |")
+        index_lines.append("|---|---|---|---|---:|---|")
+        for r in latest_runs:
+            m = r.manifest
+            repo = str(m.get("target_repo_url", "")).strip()
+            commit = str(m.get("target_commit", "")).strip()
+            commit_short = shortish(commit, max_len=10) if commit else ""
+            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            status = analysis_status(r)
+            index_lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{r.benchmark_uuid}`](/benchmarks/{r.benchmark_uuid}/)",
+                        f"[Open](/runs/{r.run_id}/{r.benchmark_uuid}/)",
+                        target_cell,
+                        f"`{commit_short}`" if commit_short else "",
+                        f"{r.timeout_hours:g}h",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+        index_lines.append("")
+
+        # Show a preview of one latest run directly on the landing page.
+        preview = next((r for r in latest_runs if r.analyzed), latest_runs[0])
+        index_lines.append("## Preview")
+        index_lines.append("")
+        index_lines.append(f"Showing: [`{preview.benchmark_uuid}`](/runs/{preview.run_id}/{preview.benchmark_uuid}/)")
+        index_lines.append("")
+        if not preview.analyzed:
+            index_lines.append("::: warning Missing analysis")
+            index_lines.append("This run is complete by time rule but is missing published analysis artifacts.")
+            index_lines.append("See [Ops notes](/ops).")
+            index_lines.append(":::")
+            index_lines.append("")
+        else:
+            base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
+            analysis_base = f"{base_url}/{preview.analysis_prefix}"
+            index_lines.append("### Charts")
+            index_lines.append("")
+            if preview.analysis_kind == "analysis":
+                index_lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                index_lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
+                index_lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                index_lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                index_lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            else:
+                index_lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                index_lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                index_lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                index_lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            index_lines.append("")
+
+            index_lines.append("::: details Report")
+            index_lines.append("")
+            try:
+                report_raw = aws_text(
+                    ["s3", "cp", f"s3://{bucket}/{preview.analysis_prefix}/REPORT.md", "-"],
+                    profile=profile,
+                )
+                index_lines.append(rewrite_headings(report_raw, add=2).rstrip())
+                index_lines.append("")
+            except Exception:
+                index_lines.append("_Failed to fetch REPORT.md from S3._")
+                index_lines.append("")
+            index_lines.append(":::")
+            index_lines.append("")
+
+        # Keep the full run list available but out of the way.
+        index_lines.append("::: details All Runs")
+        index_lines.append("")
         index_lines.append("| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout | Status |")
         index_lines.append("|---|---|---|---|---|---:|---|")
         for r in complete_runs:
             m = r.manifest
             repo = str(m.get("target_repo_url", "")).strip()
             commit = str(m.get("target_commit", "")).strip()
-            commit_short = commit[:10] if commit else ""
+            commit_short = shortish(commit, max_len=10) if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
             status = analysis_status(r)
             index_lines.append(
@@ -272,10 +356,16 @@ def main() -> int:
                 + " |"
             )
         index_lines.append("")
+        index_lines.append(":::")
+        index_lines.append("")
     write_text(docs_dir / "index.md", "\n".join(index_lines).rstrip() + "\n")
 
     # Runs index page.
     runs_lines: list[str] = []
+    runs_lines.append("---")
+    runs_lines.append("aside: false")
+    runs_lines.append("---")
+    runs_lines.append("")
     runs_lines.append("# Runs")
     runs_lines.append("")
     runs_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
@@ -313,6 +403,50 @@ def main() -> int:
         runs_lines.append("")
     write_text(docs_dir / "runs" / "index.md", "\n".join(runs_lines).rstrip() + "\n")
 
+    # Per-run-id pages (group benchmarks that share a timestamp run ID).
+    by_run_id: dict[int, list[Run]] = {}
+    for r in complete_runs:
+        by_run_id.setdefault(r.run_id, []).append(r)
+
+    for run_id, runs in by_run_id.items():
+        runs.sort(key=lambda rr: rr.benchmark_uuid)
+
+        lines: list[str] = []
+        lines.append("---")
+        lines.append("aside: false")
+        lines.append("---")
+        lines.append("")
+        lines.append(f"# Run `{run_id}`")
+        lines.append("")
+        lines.append(f"- Date (UTC): `{utc_ts(run_id)}`")
+        lines.append(f"- Benchmarks: `{len(runs)}`")
+        lines.append("")
+        lines.append("| Benchmark | Details | Target | Commit | Timeout | Status |")
+        lines.append("|---|---|---|---|---:|---|")
+        for rr in runs:
+            m = rr.manifest
+            repo = str(m.get("target_repo_url", "")).strip()
+            commit = str(m.get("target_commit", "")).strip()
+            commit_short = shortish(commit, max_len=10) if commit else ""
+            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            status = analysis_status(rr)
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{rr.benchmark_uuid}`](/benchmarks/{rr.benchmark_uuid}/)",
+                        f"[Open](./{rr.benchmark_uuid}/)",
+                        target_cell,
+                        f"`{commit_short}`" if commit_short else "",
+                        f"{rr.timeout_hours:g}h",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+        write_text(docs_dir / "runs" / str(run_id) / "index.md", "\n".join(lines).rstrip() + "\n")
+
     # Benchmarks index page.
     by_benchmark: dict[str, list[Run]] = {}
     for r in complete_runs:
@@ -321,6 +455,10 @@ def main() -> int:
         runs.sort(key=lambda rr: rr.run_id, reverse=True)
 
     bench_lines: list[str] = []
+    bench_lines.append("---")
+    bench_lines.append("aside: false")
+    bench_lines.append("---")
+    bench_lines.append("")
     bench_lines.append("# Benchmarks")
     bench_lines.append("")
     bench_lines.append(f"_Generated at: **{generated_at}** (UTC)_")

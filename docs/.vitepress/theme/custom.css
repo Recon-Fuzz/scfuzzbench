@@ -15,6 +15,9 @@
   --vp-font-family-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
 
+  /* Layout */
+  --vp-layout-max-width: 1680px;
+
   /* Brand */
   --sb-brand-1: #2dd4bf; /* teal */
   --sb-brand-2: #5eead4; /* brighter teal */
@@ -171,6 +174,11 @@
   text-underline-offset: 3px;
 }
 
+/* Wider docs content (tables are a first-class citizen). */
+.VPDoc.has-aside .content-container {
+  max-width: 1088px !important;
+}
+
 /* Tables */
 .vp-doc table {
   display: block;
@@ -192,10 +200,16 @@
 
 .vp-doc th,
 .vp-doc td {
-  padding: 0.75rem 0.9rem;
+  padding: 0.65rem 0.8rem;
   border-bottom: 1px solid var(--vp-c-divider);
   vertical-align: top;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.vp-doc table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .vp-doc tbody tr:hover td {
