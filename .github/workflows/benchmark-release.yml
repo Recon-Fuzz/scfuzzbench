@@ -19,6 +19,16 @@ on:
         description: "Comma-separated fuzzers to exclude (optional)."
         required: false
         default: ""
+      migrate_s3_layout:
+        description: "Run S3 migration to logs/<run_id>/<benchmark_uuid>/ layout (manual only)."
+        required: false
+        type: boolean
+        default: false
+      migrate_execute:
+        description: "Apply migration (true) or dry-run (false)."
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 * * * *"
 
@@ -26,7 +36,49 @@ permissions:
   contents: write
 
 jobs:
+  migrate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.migrate_s3_layout == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
+      SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure AWS credentials are configured
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets." >&2
+            exit 1
+          fi
+          if [ -z "${SCFUZZBENCH_BUCKET}" ]; then
+            echo "Set SCFUZZBENCH_BUCKET secret." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run migration
+        env:
+          BUCKET: ${{ env.SCFUZZBENCH_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.migrate_execute }}" == "true" ]]; then
+            ./scripts/migrate_s3_layout_runid_first.sh --execute
+          else
+            ./scripts/migrate_s3_layout_runid_first.sh --dryrun
+          fi
+
   discover:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.migrate_s3_layout != true }}
     runs-on: ubuntu-latest
     outputs:
       has_runs: ${{ steps.discover.outputs.has_runs }}
