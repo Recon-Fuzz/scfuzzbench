@@ -122,6 +122,18 @@ def parse_foundry_log(
             invariant = payload.get("invariant")
             if not invariant:
                 continue
+            ts = payload.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                ts_value = float(ts)
+            except (TypeError, ValueError):
+                continue
+            if first_ts is None:
+                # Foundry emits epoch timestamps; use the first seen timestamp as the
+                # baseline so elapsed_seconds measures time since the run began,
+                # not time since the first failure.
+                first_ts = ts_value
             failed = payload.get("failed")
             if failed is not None:
                 try:
@@ -132,12 +144,7 @@ def parse_foundry_log(
                     continue
             elif "assertion_failure" not in invariant:
                 continue
-            ts = payload.get("timestamp")
-            if ts is None:
-                continue
-            if first_ts is None:
-                first_ts = float(ts)
-            elapsed = float(ts) - first_ts
+            elapsed = ts_value - first_ts
             if invariant in seen:
                 continue
             seen.add(invariant)
