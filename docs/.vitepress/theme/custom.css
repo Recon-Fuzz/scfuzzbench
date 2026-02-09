@@ -15,9 +15,6 @@
   --vp-font-family-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
 
-  /* Layout */
-  --vp-layout-max-width: 1680px;
-
   /* Brand */
   --sb-brand-1: #2dd4bf; /* teal */
   --sb-brand-2: #5eead4; /* brighter teal */
@@ -186,30 +183,63 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
+  margin: 18px 0;
   border: 1px solid var(--vp-c-border);
   border-radius: 14px;
   background: color-mix(in srgb, var(--vp-c-bg-soft) 88%, transparent);
 }
 
+.vp-doc tr {
+  border-top: none;
+}
+
 .vp-doc thead th {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: color-mix(in srgb, var(--vp-c-bg-mute) 92%, transparent);
   border-bottom: 1px solid var(--vp-c-divider);
 }
 
 .vp-doc th,
 .vp-doc td {
-  padding: 0.65rem 0.8rem;
+  padding: 0.55rem 0.75rem;
+  border: none;
   border-bottom: 1px solid var(--vp-c-divider);
   vertical-align: top;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
+.vp-doc th {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--vp-c-text-2);
+  letter-spacing: 0.01em;
+}
+
+.vp-doc td {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.vp-doc tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Inline code in tables should read like labels, not pills. */
 .vp-doc table code {
+  border: none;
+  padding: 0.05em 0.28em;
+  border-radius: 6px;
+  background: var(--vp-code-bg);
+}
+
+/* Benchmarks index: allow long columns to wrap instead of destroying headers. */
+.vp-doc._benchmarks_ table td:nth-child(4),
+.vp-doc._benchmarks_ table td:nth-child(9) {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  max-width: 40ch;
 }
 
 .vp-doc tbody tr:hover td {

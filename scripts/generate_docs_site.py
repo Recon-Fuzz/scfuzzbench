@@ -97,6 +97,32 @@ def shortish(s: str, *, max_len: int = 10) -> str:
     return s if len(s) <= max_len else s[:max_len]
 
 
+def short_uuid(s: str) -> str:
+    s = str(s).strip()
+    if len(s) <= 20:
+        return s
+    return f"{s[:10]}...{s[-6:]}"
+
+
+def compact_repo_label(repo_url: str) -> str:
+    s = str(repo_url).strip()
+    if not s:
+        return ""
+
+    # Prefer `org/repo` for GitHub URLs to keep tables readable.
+    for prefix in ("https://github.com/", "http://github.com/"):
+        if s.startswith(prefix):
+            rest = s[len(prefix) :].strip("/")
+            if rest.endswith(".git"):
+                rest = rest[: -len(".git")]
+            parts = rest.split("/")
+            if len(parts) >= 2:
+                return f"{parts[0]}/{parts[1]}"
+            return rest or s
+
+    return s
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -393,9 +419,9 @@ def main() -> int:
         bench_lines.append("")
     else:
         bench_lines.append(
-            "| Benchmark | Latest Run | Date (UTC) | Target | Commit | Type | Instance | Instances | Fuzzers | scfuzzbench | Timeout | Latest Status |"
+            "| Benchmark | Latest Run | Date (UTC) | Target | Commit | Type | Instance | Instances | Fuzzers | scfuzzbench | Timeout |"
         )
-        bench_lines.append("|---|---|---|---|---|---|---|---:|---|---|---:|---|")
+        bench_lines.append("|---|---|---|---|---|---|---|---:|---|---|---:|")
 
         # Sort by latest run time so the index is useful at a glance.
         bench_entries: list[tuple[int, str, Run]] = []
@@ -408,7 +434,10 @@ def main() -> int:
             repo = str(m.get("target_repo_url", "")).strip()
             commit = str(m.get("target_commit", "")).strip()
             commit_short = shortish(commit, max_len=10) if commit else ""
-            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            target_label = compact_repo_label(repo)
+            target_cell = (
+                f"[`{target_label}`]({repo})" if target_label and repo.startswith("http") else (f"`{target_label}`" if target_label else "")
+            )
             bench_type = str(m.get("benchmark_type", "")).strip()
             inst_type = str(m.get("instance_type", "")).strip()
             insts = m.get("instances_per_fuzzer", "")
@@ -428,12 +457,11 @@ def main() -> int:
 
             sc_commit = str(m.get("scfuzzbench_commit", "")).strip()
             sc_commit_short = shortish(sc_commit, max_len=10) if sc_commit else ""
-            status = analysis_status(latest_run)
             bench_lines.append(
                 "| "
                 + " | ".join(
                     [
-                        f"[`{uuid}`](./{uuid}/)",
+                        f"[`{short_uuid(uuid)}`](./{uuid}/)",
                         f"[`{latest_run.run_id}`](../runs/{latest_run.run_id}/{uuid}/)",
                         f"`{utc_ts(latest_run.run_id)}`",
                         target_cell,
@@ -444,7 +472,6 @@ def main() -> int:
                         fuzzers_cell,
                         f"`{sc_commit_short}`" if sc_commit_short else "",
                         f"{latest_run.timeout_hours:g}h",
-                        status,
                     ]
                 )
                 + " |"
