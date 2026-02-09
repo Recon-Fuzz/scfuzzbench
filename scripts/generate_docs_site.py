@@ -90,6 +90,13 @@ def rewrite_headings(md: str, *, add: int) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def shortish(s: str, *, max_len: int = 10) -> str:
+    s = str(s).strip()
+    if not s:
+        return ""
+    return s if len(s) <= max_len else s[:max_len]
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -322,16 +329,42 @@ def main() -> int:
         bench_lines.append("_No complete runs found in the S3 run index._")
         bench_lines.append("")
     else:
-        bench_lines.append("| Benchmark | Latest Run | Date (UTC) | Target | Commit | Timeout | Latest Status |")
-        bench_lines.append("|---|---|---|---|---|---:|---|")
-        for uuid in sorted(by_benchmark.keys()):
-            runs = by_benchmark[uuid]
-            latest_run = runs[0]
+        bench_lines.append(
+            "| Benchmark | Latest Run | Date (UTC) | Target | Commit | Type | Instance | Instances | Fuzzers | scfuzzbench | Timeout | Latest Status |"
+        )
+        bench_lines.append("|---|---|---|---|---|---|---|---:|---|---|---:|---|")
+
+        # Sort by latest run time so the index is useful at a glance.
+        bench_entries: list[tuple[int, str, Run]] = []
+        for uuid, runs in by_benchmark.items():
+            bench_entries.append((runs[0].run_id, uuid, runs[0]))
+        bench_entries.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+        for _, uuid, latest_run in bench_entries:
             m = latest_run.manifest
             repo = str(m.get("target_repo_url", "")).strip()
             commit = str(m.get("target_commit", "")).strip()
-            commit_short = commit[:10] if commit else ""
+            commit_short = shortish(commit, max_len=10) if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            bench_type = str(m.get("benchmark_type", "")).strip()
+            inst_type = str(m.get("instance_type", "")).strip()
+            insts = m.get("instances_per_fuzzer", "")
+
+            fuzzers_parts: list[str] = []
+            if isinstance(m.get("fuzzer_keys"), list) and m.get("fuzzer_keys"):
+                keys = ", ".join([str(x) for x in m.get("fuzzer_keys", [])])
+                fuzzers_parts.append(f"`{keys}`")
+            versions: list[str] = []
+            for k in ["foundry_version", "echidna_version", "medusa_version", "bitwuzla_version"]:
+                v = str(m.get(k, "")).strip()
+                if v:
+                    versions.append(f"{k.removesuffix('_version')}@{v}")
+            if versions:
+                fuzzers_parts.append(f"`{', '.join(versions)}`")
+            fuzzers_cell = "<br>".join(fuzzers_parts)
+
+            sc_commit = str(m.get("scfuzzbench_commit", "")).strip()
+            sc_commit_short = shortish(sc_commit, max_len=10) if sc_commit else ""
             status = analysis_status(latest_run)
             bench_lines.append(
                 "| "
@@ -342,6 +375,11 @@ def main() -> int:
                         f"`{utc_ts(latest_run.run_id)}`",
                         target_cell,
                         f"`{commit_short}`" if commit_short else "",
+                        f"`{bench_type}`" if bench_type else "",
+                        f"`{inst_type}`" if inst_type else "",
+                        f"{insts}" if insts != "" else "",
+                        fuzzers_cell,
+                        f"`{sc_commit_short}`" if sc_commit_short else "",
                         f"{latest_run.timeout_hours:g}h",
                         status,
                     ]
@@ -379,6 +417,19 @@ def main() -> int:
             lines.append(f"- Instance type: `{inst_type}`")
         if insts != "":
             lines.append(f"- Instances per fuzzer: `{insts}`")
+        sc_commit = str(m.get("scfuzzbench_commit", "")).strip()
+        if sc_commit:
+            lines.append(f"- scfuzzbench commit: `{sc_commit}`")
+        if isinstance(m.get("fuzzer_keys"), list) and m.get("fuzzer_keys"):
+            keys = ", ".join([str(x) for x in m.get("fuzzer_keys", [])])
+            lines.append(f"- fuzzers: `{keys}`")
+        versions: list[str] = []
+        for k in ["foundry_version", "echidna_version", "medusa_version", "bitwuzla_version"]:
+            v = str(m.get(k, "")).strip()
+            if v:
+                versions.append(f"{k.removesuffix('_version')}@{v}")
+        if versions:
+            lines.append(f"- versions: `{', '.join(versions)}`")
         lines.append("")
 
         lines.append("## Runs")
@@ -427,6 +478,41 @@ def main() -> int:
             lines.append(":::")
             lines.append("")
 
+        base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
+        analysis_base = f"{base_url}/{r.analysis_prefix}"
+        logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
+        corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
+
+        if r.analyzed:
+            lines.append("## Charts")
+            lines.append("")
+            if r.analysis_kind == "analysis":
+                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
+                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            else:
+                # Legacy reports prefix may not contain all charts/bundles.
+                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            lines.append("")
+
+            lines.append("## Report")
+            lines.append("")
+            try:
+                report_raw = aws_text(
+                    ["s3", "cp", f"s3://{bucket}/{r.analysis_prefix}/REPORT.md", "-"],
+                    profile=profile,
+                )
+                lines.append(rewrite_headings(report_raw, add=2).rstrip())
+                lines.append("")
+            except Exception:
+                lines.append("_Failed to fetch REPORT.md from S3._")
+                lines.append("")
+
         # Manifest summary.
         lines.append("## Manifest")
         lines.append("")
@@ -466,11 +552,6 @@ def main() -> int:
         runs_manifest_url = s3_url(bucket, region, r.manifest_key)
         lines.append(f"- Manifest (index): {runs_manifest_url}")
         lines.append("")
-
-        base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
-        analysis_base = f"{base_url}/{r.analysis_prefix}"
-        logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
-        corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
         if r.analyzed:
             lines.append("- Report prefix: " + f"{analysis_base}/")
         if r.analysis_kind == "analysis":
@@ -481,37 +562,7 @@ def main() -> int:
         lines.append("- Raw logs prefix: " + f"{logs_base}/")
         lines.append("- Raw corpus prefix: " + f"{corpus_base}/")
         lines.append("")
-
-        if r.analyzed:
-            lines.append("## Charts")
-            lines.append("")
-            if r.analysis_kind == "analysis":
-                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
-                lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
-                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
-                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
-                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
-            else:
-                # Legacy reports prefix may not contain all charts/bundles.
-                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
-                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
-                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
-                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
-            lines.append("")
-
-            lines.append("## Report")
-            lines.append("")
-            try:
-                report_raw = aws_text(
-                    ["s3", "cp", f"s3://{bucket}/{r.analysis_prefix}/REPORT.md", "-"],
-                    profile=profile,
-                )
-                lines.append(rewrite_headings(report_raw, add=2).rstrip())
-                lines.append("")
-            except Exception:
-                lines.append("_Failed to fetch REPORT.md from S3._")
-                lines.append("")
-        else:
+        if not r.analyzed:
             # For missing-analysis runs, list raw logs/corpus objects to help triage.
             def list_and_render(prefix: str, title: str) -> None:
                 keys = list_keys(bucket, prefix, profile=profile)
