@@ -4,12 +4,12 @@ Benchmark suite for smart-contract fuzzers.
 
 <table>
   <tr>
-    <td><img src="docs/images/sample-run/bugs_over_time.png" alt="Bugs over time" width="420"></td>
-    <td><img src="docs/images/sample-run/time_to_k.png" alt="Time to k" width="420"></td>
+    <td><img src="docs/public/images/sample-run/bugs_over_time.png" alt="Bugs over time" width="420"></td>
+    <td><img src="docs/public/images/sample-run/time_to_k.png" alt="Time to k" width="420"></td>
   </tr>
   <tr>
-    <td><img src="docs/images/sample-run/final_distribution.png" alt="Final distribution" width="420"></td>
-    <td><img src="docs/images/sample-run/plateau_and_late_share.png" alt="Plateau and late share" width="420"></td>
+    <td><img src="docs/public/images/sample-run/final_distribution.png" alt="Final distribution" width="420"></td>
+    <td><img src="docs/public/images/sample-run/plateau_and_late_share.png" alt="Plateau and late share" width="420"></td>
   </tr>
 </table>
 
