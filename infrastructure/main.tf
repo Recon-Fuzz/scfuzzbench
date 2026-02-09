@@ -5,6 +5,10 @@ locals {
   timeout_seconds = var.timeout_hours * 3600
   run_id          = var.run_id != "" ? var.run_id : time_static.run.unix
 
+  # Pick an AZ that supports the requested instance type to avoid flaky applies
+  # when AWS auto-selects an AZ where the type isn't offered.
+  subnet_availability_zone = var.availability_zone != "" ? var.availability_zone : sort(data.aws_ec2_instance_type_offerings.fuzzer.locations)[0]
+
   benchmark_manifest = {
     scfuzzbench_commit   = var.scfuzzbench_commit
     target_repo_url      = var.target_repo_url
@@ -80,6 +84,24 @@ data "aws_ssm_parameter" "ubuntu_ami" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+data "aws_ec2_instance_type_offerings" "fuzzer" {
+  filter {
+    name   = "instance-type"
+    values = [var.instance_type]
+  }
+
+  filter {
+    name   = "location"
+    values = data.aws_availability_zones.available.names
+  }
+
+  location_type = "availability-zone"
+}
+
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -101,7 +123,7 @@ resource "aws_internet_gateway" "main" {
 resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidr
-  availability_zone       = var.availability_zone != "" ? var.availability_zone : null
+  availability_zone       = local.subnet_availability_zone
   map_public_ip_on_launch = true
 
   tags = merge(local.tags, {
