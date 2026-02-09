@@ -59,6 +59,13 @@ __pycache__/
 # MkDocs build output
 site/
 
+# Node artifacts
+node_modules/
+
+# VitePress build output
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # Generated docs pages (from scripts/generate_docs_site.py)
 docs/runs/[0-9]*/
 docs/benchmarks/[0-9a-f]*/
