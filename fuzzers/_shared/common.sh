@@ -828,6 +828,15 @@ upload_results() {
     local manifest_path="${upload_dir}/benchmark_manifest.json"
     echo "${SCFUZZBENCH_BENCHMARK_MANIFEST_B64}" | base64 -d > "${manifest_path}"
     retry_cmd 5 60 aws_cli s3 cp "${manifest_path}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/manifest.json" --no-progress
+
+    # Timestamp-first discovery index for the docs site:
+    # runs/<run_id>/<benchmark_uuid>/manifest.json
+    if [[ -n "${SCFUZZBENCH_BENCHMARK_UUID}" && "${SCFUZZBENCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
+      local index_dest="s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/manifest.json"
+      retry_cmd 5 60 aws_cli s3 cp "${manifest_path}" "${index_dest}" --no-progress
+    else
+      log "Skipping docs index upload; missing benchmark UUID or non-numeric run id."
+    fi
   fi
 
   local log_dest="s3://${SCFUZZBENCH_S3_BUCKET}/logs/${prefix}/${base_name}.zip"

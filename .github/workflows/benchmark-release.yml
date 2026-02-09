@@ -220,7 +220,7 @@ PY
         run: |
           set -euo pipefail
           dest_root="${GITHUB_WORKSPACE}/analysis-artifacts/${{ matrix.run_id }}"
-          analysis_dir="${dest_root}/analysis"
+          analysis_dir="${dest_root}/analysis-artifacts"
           mkdir -p "${analysis_dir}"
           manifest_key="logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}/manifest.json"
           aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${manifest_key}" "${analysis_dir}/manifest.json"
@@ -265,6 +265,25 @@ PY
           set -euo pipefail
           make results-analyze-all
 
+      - name: Collect analysis artifacts
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        run: |
+          set -euo pipefail
+          dest_root="${{ steps.manifest.outputs.dest_root }}"
+          analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
+
+          # MkDocs/website + release notes expect these at the top-level.
+          cp "${dest_root}/data/REPORT.md" "${analysis_dir}/REPORT.md"
+          cp "${dest_root}/images/bugs_over_time.png" "${analysis_dir}/bugs_over_time.png"
+          cp "${dest_root}/images/bugs_over_time_runs.png" "${analysis_dir}/bugs_over_time_runs.png"
+          cp "${dest_root}/images/time_to_k.png" "${analysis_dir}/time_to_k.png"
+          cp "${dest_root}/images/final_distribution.png" "${analysis_dir}/final_distribution.png"
+          cp "${dest_root}/images/plateau_and_late_share.png" "${analysis_dir}/plateau_and_late_share.png"
+
+          # Optional: include raw CSV outputs in the analysis bundle for debugging.
+          mkdir -p "${analysis_dir}/data"
+          cp "${dest_root}/data/"*.csv "${analysis_dir}/data/" || true
+
       - name: Build release bundles
         if: ${{ steps.release_check.outputs.exists != 'true' }}
         id: bundles
@@ -303,6 +322,7 @@ PY
 
           aws s3 cp "${analysis_dir}/REPORT.md" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/REPORT.md" --content-type text/markdown
           aws s3 cp "${analysis_dir}/bugs_over_time.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bugs_over_time.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/bugs_over_time_runs.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bugs_over_time_runs.png" --content-type image/png
           aws s3 cp "${analysis_dir}/time_to_k.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/time_to_k.png" --content-type image/png
           aws s3 cp "${analysis_dir}/final_distribution.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/final_distribution.png" --content-type image/png
           aws s3 cp "${analysis_dir}/plateau_and_late_share.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/plateau_and_late_share.png" --content-type image/png
@@ -338,6 +358,7 @@ PY
             echo ""
             echo "Charts:"
             echo "![Bugs Over Time](${analysis_base}/bugs_over_time.png)"
+            echo "![Bugs Over Time (All Runs)](${analysis_base}/bugs_over_time_runs.png)"
             echo "![Time To K](${analysis_base}/time_to_k.png)"
             echo "![Final Distribution](${analysis_base}/final_distribution.png)"
             echo "![Plateau And Late Share](${analysis_base}/plateau_and_late_share.png)"

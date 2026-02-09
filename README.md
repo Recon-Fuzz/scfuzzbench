@@ -203,6 +203,8 @@ Two workflows publish runs and releases directly from CI/CD:
   - Release notes are based on `REPORT.md` with an appended artifacts section.
   - Analysis artifacts (REPORT + charts + bundles) are uploaded to:
     `s3://<bucket>/analysis/<benchmark_uuid>/<run_id>/`.
+  - If a run is complete but **missing** analysis artifacts, the release pipeline did not finish; re-run
+    Benchmark Release or manually analyze/upload (see `docs/ops.md`).
 
 The logs bucket is configured for public read so the release can link directly to S3-hosted charts
 and zip bundles.
