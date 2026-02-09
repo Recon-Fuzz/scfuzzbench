@@ -55,7 +55,6 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Discover runs
@@ -122,17 +121,17 @@ def list_prefixes(prefix: str) -> list[str]:
     return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
 
 runs: list[dict] = []
-for bench_prefix in list_prefixes("logs/"):
-    parts = bench_prefix.strip("/").split("/")
+for run_prefix in list_prefixes("logs/"):
+    parts = run_prefix.strip("/").split("/")
     if len(parts) < 2:
         continue
-    benchmark_uuid = parts[1]
-    for run_prefix in list_prefixes(f"logs/{benchmark_uuid}/"):
-        run_parts = run_prefix.strip("/").split("/")
-        if len(run_parts) < 3:
+    run_id = parts[1]
+    for bench_prefix in list_prefixes(f"logs/{run_id}/"):
+        bench_parts = bench_prefix.strip("/").split("/")
+        if len(bench_parts) < 3:
             continue
-        run_id = run_parts[2]
-        manifest_key = f"logs/{benchmark_uuid}/{run_id}/manifest.json"
+        benchmark_uuid = bench_parts[2]
+        manifest_key = f"logs/{run_id}/{benchmark_uuid}/manifest.json"
         try:
             manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
             manifest = json.loads(manifest_raw)
@@ -185,7 +184,6 @@ PY
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Check for existing release
@@ -222,7 +220,7 @@ PY
           dest_root="${GITHUB_WORKSPACE}/analysis-artifacts/${{ matrix.run_id }}"
           analysis_dir="${dest_root}/analysis"
           mkdir -p "${analysis_dir}"
-          manifest_key="logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}/manifest.json"
+          manifest_key="logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}/manifest.json"
           aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${manifest_key}" "${analysis_dir}/manifest.json"
 
           timeout_hours="${{ matrix.timeout_hours }}"
@@ -265,6 +263,25 @@ PY
           set -euo pipefail
           make results-analyze-all
 
+      - name: Collect analysis artifacts
+        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        run: |
+          set -euo pipefail
+          dest_root="${{ steps.manifest.outputs.dest_root }}"
+          analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
+
+          # Website + release notes expect these at the top-level.
+          cp "${dest_root}/data/REPORT.md" "${analysis_dir}/REPORT.md"
+          cp "${dest_root}/images/bugs_over_time.png" "${analysis_dir}/bugs_over_time.png"
+          cp "${dest_root}/images/bugs_over_time_runs.png" "${analysis_dir}/bugs_over_time_runs.png"
+          cp "${dest_root}/images/time_to_k.png" "${analysis_dir}/time_to_k.png"
+          cp "${dest_root}/images/final_distribution.png" "${analysis_dir}/final_distribution.png"
+          cp "${dest_root}/images/plateau_and_late_share.png" "${analysis_dir}/plateau_and_late_share.png"
+
+          # Optional: include raw CSV outputs in the analysis bundle for debugging.
+          mkdir -p "${analysis_dir}/data"
+          cp "${dest_root}/data/"*.csv "${analysis_dir}/data/" || true
+
       - name: Build release bundles
         if: ${{ steps.release_check.outputs.exists != 'true' }}
         id: bundles
@@ -303,6 +320,7 @@ PY
 
           aws s3 cp "${analysis_dir}/REPORT.md" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/REPORT.md" --content-type text/markdown
           aws s3 cp "${analysis_dir}/bugs_over_time.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bugs_over_time.png" --content-type image/png
+          aws s3 cp "${analysis_dir}/bugs_over_time_runs.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/bugs_over_time_runs.png" --content-type image/png
           aws s3 cp "${analysis_dir}/time_to_k.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/time_to_k.png" --content-type image/png
           aws s3 cp "${analysis_dir}/final_distribution.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/final_distribution.png" --content-type image/png
           aws s3 cp "${analysis_dir}/plateau_and_late_share.png" "s3://${SCFUZZBENCH_BUCKET}/${s3_prefix}/plateau_and_late_share.png" --content-type image/png
@@ -328,8 +346,8 @@ PY
 
           base_url="https://${SCFUZZBENCH_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
           analysis_base="${base_url}/analysis/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
-          logs_base="${base_url}/logs/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
-          corpus_base="${base_url}/corpus/${{ matrix.benchmark_uuid }}/${{ matrix.run_id }}"
+          logs_base="${base_url}/logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}"
+          corpus_base="${base_url}/corpus/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}"
           bundles_base="${analysis_base}/bundles"
 
           {
@@ -338,6 +356,7 @@ PY
             echo ""
             echo "Charts:"
             echo "![Bugs Over Time](${analysis_base}/bugs_over_time.png)"
+            echo "![Bugs Over Time (All Runs)](${analysis_base}/bugs_over_time_runs.png)"
             echo "![Time To K](${analysis_base}/time_to_k.png)"
             echo "![Final Distribution](${analysis_base}/final_distribution.png)"
             echo "![Plateau And Late Share](${analysis_base}/plateau_and_late_share.png)"

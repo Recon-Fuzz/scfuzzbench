@@ -32,7 +32,10 @@ def list_keys(bucket: str, prefix: str, profile: str | None) -> list[str]:
     output = subprocess.check_output(cmd, env=aws_env(profile))
     if not output:
         return []
-    return json.loads(output)
+    keys = json.loads(output)
+    if keys is None:
+        return []
+    return keys
 
 
 def download_zip(bucket: str, key: str, dest_zip: Path, profile: str | None) -> None:
@@ -50,7 +53,7 @@ def main() -> int:
     parser.add_argument(
         "--benchmark-uuid",
         default=None,
-        help="Benchmark UUID used in S3 prefixes (logs/<uuid>/<run_id>/...).",
+        help="Benchmark UUID used in S3 prefixes (logs/<run_id>/<uuid>/...). If omitted, downloads all benchmarks under the run.",
     )
     parser.add_argument(
         "--prefix",
@@ -74,12 +77,13 @@ def main() -> int:
         if args.prefix:
             prefix = args.prefix.rstrip("/") + "/"
         elif args.benchmark_uuid:
-            prefix = f"{category}/{args.benchmark_uuid}/{args.run_id}/"
+            prefix = f"{category}/{args.run_id}/{args.benchmark_uuid}/"
         else:
             prefix = f"{category}/{args.run_id}/"
+
         keys = list_keys(args.bucket, prefix, args.profile)
         if not keys:
-            print(f"No {category} artifacts found under {prefix}.")
+            print(f"No {category} artifacts found under: {prefix}.")
             continue
         zip_dir = args.dest / category / "zips"
         unzip_dir = args.dest / category / "unzipped"

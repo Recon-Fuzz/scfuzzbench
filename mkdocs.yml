@@ -1,0 +1,52 @@
+site_name: scfuzzbench
+site_description: Benchmark suite for smart-contract fuzzers.
+site_url: https://scfuzzbench.com/
+
+repo_url: https://github.com/Recon-Fuzz/scfuzzbench
+repo_name: Recon-Fuzz/scfuzzbench
+
+theme:
+  name: material
+  language: en
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Runs: runs/index.md
+  - Benchmarks: benchmarks/index.md
+  - Ops: ops.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css

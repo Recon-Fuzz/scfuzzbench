@@ -55,3 +55,10 @@ __pycache__/
 
 # AGENTS
 .worktrees
+
+# MkDocs build output
+site/
+
+# Generated docs pages (from scripts/generate_docs_site.py)
+docs/runs/[0-9]*/
+docs/benchmarks/[0-9a-f]*/

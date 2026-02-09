@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+
+
+RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\\.json$")
+
+
+def aws_env(profile: str | None) -> dict:
+    env = os.environ.copy()
+    if profile:
+        env["AWS_PROFILE"] = profile
+    return env
+
+
+def aws_json(args: list[str], *, profile: str | None) -> dict:
+    out = subprocess.check_output(["aws", *args, "--output", "json"], text=True, env=aws_env(profile))
+    return json.loads(out) if out.strip() else {}
+
+
+def aws_text(args: list[str], *, profile: str | None) -> str:
+    return subprocess.check_output(["aws", *args], text=True, env=aws_env(profile))
+
+
+def list_keys(bucket: str, prefix: str, *, profile: str | None) -> list[str]:
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        cmd = ["s3api", "list-objects-v2", "--bucket", bucket, "--prefix", prefix]
+        if token:
+            cmd += ["--continuation-token", token]
+        data = aws_json(cmd, profile=profile)
+        keys.extend([obj["Key"] for obj in data.get("Contents", [])])
+        if not data.get("IsTruncated"):
+            break
+        token = data.get("NextContinuationToken")
+        if not token:
+            break
+    return keys
+
+
+def head_exists(bucket: str, key: str, *, profile: str | None) -> bool:
+    try:
+        subprocess.check_call(
+            ["aws", "s3api", "head-object", "--bucket", bucket, "--key", key],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=aws_env(profile),
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def s3_url(bucket: str, region: str, key: str) -> str:
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+
+
+def utc_ts(ts: int) -> str:
+    return dt.datetime.fromtimestamp(ts, tz=dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def safe_float(value: object, default: float) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+
+
+def rewrite_headings(md: str, *, add: int) -> str:
+    out: list[str] = []
+    for line in md.splitlines():
+        m = re.match(r"^(#+)(\\s+.*)$", line)
+        if not m:
+            out.append(line)
+            continue
+        hashes, rest = m.group(1), m.group(2)
+        out.append("#" * (len(hashes) + add) + rest)
+    return "\n".join(out).rstrip() + "\n"
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def rm_tree_children(dir_path: Path, *, keep_files: set[str], dir_name_re: re.Pattern[str] | None) -> None:
+    if not dir_path.exists():
+        return
+    for child in dir_path.iterdir():
+        if child.is_file() and child.name in keep_files:
+            continue
+        if child.is_dir():
+            if dir_name_re and not dir_name_re.match(child.name):
+                continue
+            shutil.rmtree(child)
+
+
+@dataclass(frozen=True)
+class Run:
+    run_id: int
+    benchmark_uuid: str
+    manifest_key: str
+    manifest: dict
+    timeout_hours: float
+    analyzed: bool
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate scfuzzbench MkDocs pages from S3.")
+    parser.add_argument("--bucket", required=True)
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "").strip() or "us-east-1")
+    parser.add_argument("--profile", default=None)
+    parser.add_argument("--docs-dir", type=Path, default=Path("docs"))
+    parser.add_argument("--grace-seconds", type=int, default=3600)
+    parser.add_argument("--recent", type=int, default=20)
+    args = parser.parse_args()
+
+    bucket: str = args.bucket
+    region: str = args.region
+    profile: str | None = args.profile
+    docs_dir: Path = args.docs_dir
+
+    now = int(time.time())
+    generated_at = dt.datetime.fromtimestamp(now, tz=dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+    # Discover manifests via the timestamp-first run index.
+    keys = list_keys(bucket, "runs/", profile=profile)
+    candidates: list[tuple[int, str, str]] = []
+    for key in keys:
+        m = RUN_MANIFEST_RE.match(key)
+        if not m:
+            continue
+        run_id = int(m.group(1))
+        benchmark_uuid = m.group(2)
+        candidates.append((run_id, benchmark_uuid, key))
+
+    # Load manifests + filter complete runs.
+    complete_runs: list[Run] = []
+    for run_id, benchmark_uuid, manifest_key in sorted(candidates, reverse=True):
+        try:
+            raw = aws_text(["s3", "cp", f"s3://{bucket}/{manifest_key}", "-"], profile=profile)
+            manifest = json.loads(raw)
+        except Exception:
+            # Skip malformed or missing manifests.
+            continue
+
+        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
+        deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
+        if now < deadline:
+            continue
+
+        report_key = f"analysis/{benchmark_uuid}/{run_id}/REPORT.md"
+        analyzed = head_exists(bucket, report_key, profile=profile)
+        complete_runs.append(
+            Run(
+                run_id=run_id,
+                benchmark_uuid=benchmark_uuid,
+                manifest_key=manifest_key,
+                manifest=manifest,
+                timeout_hours=timeout_hours,
+                analyzed=analyzed,
+            )
+        )
+
+    complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
+
+    # Clean previously generated run/benchmark subpages.
+    rm_tree_children(
+        docs_dir / "runs",
+        keep_files={"index.md"},
+        dir_name_re=re.compile(r"^[0-9]+$"),
+    )
+    rm_tree_children(
+        docs_dir / "benchmarks",
+        keep_files={"index.md"},
+        dir_name_re=re.compile(r"^[0-9a-f]{32}$"),
+    )
+
+    # Home page: latest complete run + recent list.
+    latest = complete_runs[0] if complete_runs else None
+    home_lines: list[str] = []
+    home_lines.append("# scfuzzbench")
+    home_lines.append("")
+    home_lines.append("Benchmark suite for smart-contract fuzzers.")
+    home_lines.append("")
+    home_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
+    home_lines.append("")
+    home_lines.append("!!! info")
+    home_lines.append("    The site lists **only complete runs** (timeout + 1h grace).")
+    home_lines.append("    Complete runs missing analysis are kept visible with warnings for later triage.")
+    home_lines.append("")
+
+    if latest:
+        home_lines.append("## Latest complete run")
+        home_lines.append("")
+        home_lines.append(f"- Run: [`{latest.run_id}`](runs/{latest.run_id}/{latest.benchmark_uuid}/)")
+        home_lines.append(f"- Date (UTC): `{utc_ts(latest.run_id)}`")
+        home_lines.append(f"- Benchmark: [`{latest.benchmark_uuid}`](benchmarks/{latest.benchmark_uuid}/)")
+        home_lines.append("")
+    else:
+        home_lines.append("## Latest complete run")
+        home_lines.append("")
+        home_lines.append("_No complete runs found in the S3 run index._")
+        home_lines.append("")
+
+    home_lines.append("## Recent complete runs")
+    home_lines.append("")
+    recent = complete_runs[: max(0, int(args.recent))]
+    if not recent:
+        home_lines.append("_No complete runs found._")
+    else:
+        home_lines.append("| Run ID | Date (UTC) | Benchmark | Status |")
+        home_lines.append("|---|---|---|---|")
+        for r in recent:
+            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            home_lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{r.run_id}`](runs/{r.run_id}/{r.benchmark_uuid}/)",
+                        f"`{utc_ts(r.run_id)}`",
+                        f"[`{r.benchmark_uuid}`](benchmarks/{r.benchmark_uuid}/)",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+    home_lines.append("")
+    write_text(docs_dir / "index.md", "\n".join(home_lines).rstrip() + "\n")
+
+    # Runs index page.
+    runs_lines: list[str] = []
+    runs_lines.append("# Runs")
+    runs_lines.append("")
+    runs_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
+    runs_lines.append("")
+    runs_lines.append("Only **complete** runs are shown (timeout + 1h grace).")
+    runs_lines.append("")
+    if not complete_runs:
+        runs_lines.append("_No complete runs found in the S3 run index._")
+        runs_lines.append("")
+    else:
+        runs_lines.append("| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout | Status |")
+        runs_lines.append("|---|---|---|---|---|---:|---|")
+        for r in complete_runs:
+            m = r.manifest
+            repo = str(m.get("target_repo_url", "")).strip()
+            commit = str(m.get("target_commit", "")).strip()
+            commit_short = commit[:10] if commit else ""
+            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            runs_lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{r.run_id}`](./{r.run_id}/{r.benchmark_uuid}/)",
+                        f"`{utc_ts(r.run_id)}`",
+                        f"[`{r.benchmark_uuid}`](../benchmarks/{r.benchmark_uuid}/)",
+                        target_cell,
+                        f"`{commit_short}`" if commit_short else "",
+                        f"{r.timeout_hours:g}h",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+        runs_lines.append("")
+    write_text(docs_dir / "runs" / "index.md", "\n".join(runs_lines).rstrip() + "\n")
+
+    # Benchmarks index page.
+    by_benchmark: dict[str, list[Run]] = {}
+    for r in complete_runs:
+        by_benchmark.setdefault(r.benchmark_uuid, []).append(r)
+    for uuid, runs in by_benchmark.items():
+        runs.sort(key=lambda rr: rr.run_id, reverse=True)
+
+    bench_lines: list[str] = []
+    bench_lines.append("# Benchmarks")
+    bench_lines.append("")
+    bench_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
+    bench_lines.append("")
+    if not by_benchmark:
+        bench_lines.append("_No complete runs found in the S3 run index._")
+        bench_lines.append("")
+    else:
+        bench_lines.append("| Benchmark | Latest Run | Date (UTC) | Target | Commit | Timeout | Latest Status |")
+        bench_lines.append("|---|---|---|---|---|---:|---|")
+        for uuid in sorted(by_benchmark.keys()):
+            runs = by_benchmark[uuid]
+            latest_run = runs[0]
+            m = latest_run.manifest
+            repo = str(m.get("target_repo_url", "")).strip()
+            commit = str(m.get("target_commit", "")).strip()
+            commit_short = commit[:10] if commit else ""
+            target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
+            status = "Analyzed" if latest_run.analyzed else "**Missing analysis**"
+            bench_lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{uuid}`](./{uuid}/)",
+                        f"[`{latest_run.run_id}`](../runs/{latest_run.run_id}/{uuid}/)",
+                        f"`{utc_ts(latest_run.run_id)}`",
+                        target_cell,
+                        f"`{commit_short}`" if commit_short else "",
+                        f"{latest_run.timeout_hours:g}h",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+        bench_lines.append("")
+    write_text(docs_dir / "benchmarks" / "index.md", "\n".join(bench_lines).rstrip() + "\n")
+
+    # Per-benchmark pages.
+    for uuid, runs in by_benchmark.items():
+        lines: list[str] = []
+        lines.append(f"# Benchmark `{uuid}`")
+        lines.append("")
+        lines.append(f"_Generated at: **{generated_at}** (UTC)_")
+        lines.append("")
+        latest_run = runs[0]
+        m = latest_run.manifest
+        repo = str(m.get("target_repo_url", "")).strip()
+        commit = str(m.get("target_commit", "")).strip()
+        bench_type = str(m.get("benchmark_type", "")).strip()
+        inst_type = str(m.get("instance_type", "")).strip()
+        insts = m.get("instances_per_fuzzer", "")
+        lines.append("## Latest")
+        lines.append("")
+        lines.append(f"- Run: [`{latest_run.run_id}`](../../runs/{latest_run.run_id}/{uuid}/)")
+        lines.append(f"- Date (UTC): `{utc_ts(latest_run.run_id)}`")
+        if repo:
+            lines.append(f"- Target: [{repo}]({repo})" if repo.startswith("http") else f"- Target: `{repo}`")
+        if commit:
+            lines.append(f"- Commit: `{commit}`")
+        if bench_type:
+            lines.append(f"- Type: `{bench_type}`")
+        if inst_type:
+            lines.append(f"- Instance type: `{inst_type}`")
+        if insts != "":
+            lines.append(f"- Instances per fuzzer: `{insts}`")
+        lines.append("")
+
+        lines.append("## Runs")
+        lines.append("")
+        lines.append("| Run ID | Date (UTC) | Status |")
+        lines.append("|---|---|---|")
+        for r in runs:
+            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"[`{r.run_id}`](../../runs/{r.run_id}/{uuid}/)",
+                        f"`{utc_ts(r.run_id)}`",
+                        status,
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+        write_text(docs_dir / "benchmarks" / uuid / "index.md", "\n".join(lines).rstrip() + "\n")
+
+    # Per-run pages.
+    for r in complete_runs:
+        m = r.manifest
+        run_dir = docs_dir / "runs" / str(r.run_id) / r.benchmark_uuid
+
+        lines: list[str] = []
+        lines.append(f"# Run `{r.run_id}`")
+        lines.append("")
+        lines.append(f"- Date (UTC): `{utc_ts(r.run_id)}`")
+        lines.append(f"- Benchmark: [`{r.benchmark_uuid}`](../../../benchmarks/{r.benchmark_uuid}/)")
+        lines.append(f"- Timeout: `{r.timeout_hours:g}h` (+1h grace for completeness)")
+        lines.append("")
+
+        if not r.analyzed:
+            lines.append("!!! warning")
+            lines.append("    This run is **complete** by time rule but is missing published analysis artifacts.")
+            lines.append("    It likely needs a manual **Benchmark Release** re-run or manual analysis + upload.")
+            lines.append("    See [Ops notes](../../../ops/).")
+            lines.append("")
+
+        # Manifest summary.
+        lines.append("## Manifest")
+        lines.append("")
+        def add_kv(label: str, value: object) -> None:
+            if value is None:
+                return
+            s = str(value).strip()
+            if not s:
+                return
+            if label.lower().endswith("url") and s.startswith("http"):
+                lines.append(f"- {label}: [{s}]({s})")
+            else:
+                lines.append(f"- {label}: `{s}`")
+
+        add_kv("scfuzzbench_commit", m.get("scfuzzbench_commit"))
+        add_kv("target_repo_url", m.get("target_repo_url"))
+        add_kv("target_commit", m.get("target_commit"))
+        add_kv("benchmark_type", m.get("benchmark_type"))
+        add_kv("instance_type", m.get("instance_type"))
+        add_kv("instances_per_fuzzer", m.get("instances_per_fuzzer"))
+        add_kv("timeout_hours", m.get("timeout_hours"))
+        add_kv("aws_region", m.get("aws_region"))
+        add_kv("ubuntu_ami_id", m.get("ubuntu_ami_id"))
+        add_kv("foundry_version", m.get("foundry_version"))
+        add_kv("foundry_git_repo", m.get("foundry_git_repo"))
+        add_kv("foundry_git_ref", m.get("foundry_git_ref"))
+        add_kv("echidna_version", m.get("echidna_version"))
+        add_kv("medusa_version", m.get("medusa_version"))
+        add_kv("bitwuzla_version", m.get("bitwuzla_version"))
+        if isinstance(m.get("fuzzer_keys"), list):
+            lines.append(f"- fuzzer_keys: `{', '.join([str(x) for x in m.get('fuzzer_keys', [])])}`")
+        lines.append("")
+
+        # Artifact links.
+        lines.append("## Artifacts")
+        lines.append("")
+        runs_manifest_url = s3_url(bucket, region, r.manifest_key)
+        lines.append(f"- Manifest (index): {runs_manifest_url}")
+        lines.append("")
+
+        base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
+        analysis_base = f"{base_url}/analysis/{r.benchmark_uuid}/{r.run_id}"
+        logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
+        corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
+        bundles_base = f"{analysis_base}/bundles"
+        lines.append("- Analysis bundle: " + f"{bundles_base}/analysis.zip")
+        lines.append("- Logs bundle: " + f"{bundles_base}/logs.zip")
+        lines.append("- Corpus bundle: " + f"{bundles_base}/corpus.zip")
+        lines.append("- Raw logs prefix: " + f"{logs_base}/")
+        lines.append("- Raw corpus prefix: " + f"{corpus_base}/")
+        lines.append("")
+
+        if r.analyzed:
+            lines.append("## Charts")
+            lines.append("")
+            lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+            lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
+            lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+            lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+            lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            lines.append("")
+
+            lines.append("## Report")
+            lines.append("")
+            try:
+                report_raw = aws_text(
+                    ["s3", "cp", f"s3://{bucket}/analysis/{r.benchmark_uuid}/{r.run_id}/REPORT.md", "-"],
+                    profile=profile,
+                )
+                lines.append(rewrite_headings(report_raw, add=2).rstrip())
+                lines.append("")
+            except Exception:
+                lines.append("_Failed to fetch REPORT.md from S3._")
+                lines.append("")
+        else:
+            # For missing-analysis runs, list raw logs/corpus objects to help triage.
+            def list_and_render(prefix: str, title: str) -> None:
+                keys = list_keys(bucket, prefix, profile=profile)
+                if not keys:
+                    return
+                # Keep the list focused on downloadable objects.
+                zips = [k for k in keys if k.endswith(".zip")]
+                if not zips:
+                    return
+                lines.append(f"<details>")
+                lines.append(f"<summary>{title} ({len(zips)})</summary>")
+                lines.append("")
+                for k in sorted(zips):
+                    name = k.split("/")[-1]
+                    lines.append(f"- [{name}]({s3_url(bucket, region, k)})")
+                lines.append("")
+                lines.append(f"</details>")
+                lines.append("")
+
+            list_and_render(f"logs/{r.run_id}/{r.benchmark_uuid}/", "Raw logs (.zip)")
+            list_and_render(f"corpus/{r.run_id}/{r.benchmark_uuid}/", "Raw corpus (.zip)")
+
+        write_text(run_dir / "index.md", "\n".join(lines).rstrip() + "\n")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
