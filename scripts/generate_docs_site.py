@@ -9,11 +9,12 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 
 
-RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\\.json$")
+RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
 
 
 def aws_env(profile: str | None) -> dict:
@@ -114,6 +115,16 @@ class Run:
     manifest: dict
     timeout_hours: float
     analyzed: bool
+    analysis_kind: str  # "analysis", "reports", or "missing"
+    analysis_prefix: str  # key prefix containing report/charts (no leading slash)
+
+
+def analysis_status(r: Run) -> str:
+    if not r.analyzed:
+        return "**Missing analysis**"
+    if r.analysis_kind == "reports":
+        return "Analyzed (legacy)"
+    return "Analyzed"
 
 
 def main() -> int:
@@ -136,6 +147,7 @@ def main() -> int:
 
     # Discover manifests via the timestamp-first run index.
     keys = list_keys(bucket, "runs/", profile=profile)
+    print(f"Discovered {len(keys)} S3 keys under runs/")
     candidates: list[tuple[int, str, str]] = []
     for key in keys:
         m = RUN_MANIFEST_RE.match(key)
@@ -144,6 +156,14 @@ def main() -> int:
         run_id = int(m.group(1))
         benchmark_uuid = m.group(2)
         candidates.append((run_id, benchmark_uuid, key))
+
+    if keys and not candidates:
+        print(
+            "WARNING: Found S3 keys under runs/ but none matched the manifest pattern. "
+            "This usually means the manifest regex is wrong.",
+            file=sys.stderr,
+        )
+    print(f"Matched {len(candidates)} run manifest keys")
 
     # Load manifests + filter complete runs.
     complete_runs: list[Run] = []
@@ -160,8 +180,21 @@ def main() -> int:
         if now < deadline:
             continue
 
-        report_key = f"analysis/{benchmark_uuid}/{run_id}/REPORT.md"
-        analyzed = head_exists(bucket, report_key, profile=profile)
+        analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
+        legacy_prefix = f"reports/{benchmark_uuid}/{run_id}"
+        report_key = f"{analysis_prefix}/REPORT.md"
+        legacy_report_key = f"{legacy_prefix}/REPORT.md"
+
+        analyzed = False
+        analysis_kind = "missing"
+        report_prefix = analysis_prefix
+        if head_exists(bucket, report_key, profile=profile):
+            analyzed = True
+            analysis_kind = "analysis"
+        elif head_exists(bucket, legacy_report_key, profile=profile):
+            analyzed = True
+            analysis_kind = "reports"
+            report_prefix = legacy_prefix
         complete_runs.append(
             Run(
                 run_id=run_id,
@@ -170,10 +203,13 @@ def main() -> int:
                 manifest=manifest,
                 timeout_hours=timeout_hours,
                 analyzed=analyzed,
+                analysis_kind=analysis_kind,
+                analysis_prefix=report_prefix,
             )
         )
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
+    print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
 
     # Clean previously generated run/benchmark subpages.
     rm_tree_children(
@@ -242,7 +278,7 @@ def main() -> int:
         home_lines.append("| Run ID | Date (UTC) | Benchmark | Status |")
         home_lines.append("|---|---|---|---|")
         for r in recent:
-            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            status = analysis_status(r)
             home_lines.append(
                 "| "
                 + " | ".join(
@@ -278,7 +314,7 @@ def main() -> int:
             commit = str(m.get("target_commit", "")).strip()
             commit_short = commit[:10] if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
-            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            status = analysis_status(r)
             runs_lines.append(
                 "| "
                 + " | ".join(
@@ -323,7 +359,7 @@ def main() -> int:
             commit = str(m.get("target_commit", "")).strip()
             commit_short = commit[:10] if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
-            status = "Analyzed" if latest_run.analyzed else "**Missing analysis**"
+            status = analysis_status(latest_run)
             bench_lines.append(
                 "| "
                 + " | ".join(
@@ -377,7 +413,7 @@ def main() -> int:
         lines.append("| Run ID | Date (UTC) | Status |")
         lines.append("|---|---|---|")
         for r in runs:
-            status = "Analyzed" if r.analyzed else "**Missing analysis**"
+            status = analysis_status(r)
             lines.append(
                 "| "
                 + " | ".join(
@@ -411,6 +447,10 @@ def main() -> int:
             lines.append("It likely needs a manual **Benchmark Release** re-run or manual analysis + upload.")
             lines.append("See [Ops notes](../../../ops/).")
             lines.append(":::")
+            lines.append("")
+        elif r.analysis_kind == "reports":
+            lines.append("!!! info")
+            lines.append("    This run's analysis artifacts are stored under the legacy `reports/` prefix.")
             lines.append("")
 
         # Manifest summary.
@@ -454,13 +494,16 @@ def main() -> int:
         lines.append("")
 
         base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
-        analysis_base = f"{base_url}/analysis/{r.benchmark_uuid}/{r.run_id}"
+        analysis_base = f"{base_url}/{r.analysis_prefix}"
         logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
         corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
-        bundles_base = f"{analysis_base}/bundles"
-        lines.append("- Analysis bundle: " + f"{bundles_base}/analysis.zip")
-        lines.append("- Logs bundle: " + f"{bundles_base}/logs.zip")
-        lines.append("- Corpus bundle: " + f"{bundles_base}/corpus.zip")
+        if r.analyzed:
+            lines.append("- Report prefix: " + f"{analysis_base}/")
+        if r.analysis_kind == "analysis":
+            bundles_base = f"{analysis_base}/bundles"
+            lines.append("- Analysis bundle: " + f"{bundles_base}/analysis.zip")
+            lines.append("- Logs bundle: " + f"{bundles_base}/logs.zip")
+            lines.append("- Corpus bundle: " + f"{bundles_base}/corpus.zip")
         lines.append("- Raw logs prefix: " + f"{logs_base}/")
         lines.append("- Raw corpus prefix: " + f"{corpus_base}/")
         lines.append("")
@@ -468,18 +511,25 @@ def main() -> int:
         if r.analyzed:
             lines.append("## Charts")
             lines.append("")
-            lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
-            lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
-            lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
-            lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
-            lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            if r.analysis_kind == "analysis":
+                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                lines.append(f"![Bugs Over Time (All Runs)]({analysis_base}/bugs_over_time_runs.png)")
+                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+            else:
+                # Legacy reports prefix may not contain all charts/bundles.
+                lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
+                lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
+                lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
+                lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
             lines.append("")
 
             lines.append("## Report")
             lines.append("")
             try:
                 report_raw = aws_text(
-                    ["s3", "cp", f"s3://{bucket}/analysis/{r.benchmark_uuid}/{r.run_id}/REPORT.md", "-"],
+                    ["s3", "cp", f"s3://{bucket}/{r.analysis_prefix}/REPORT.md", "-"],
                     profile=profile,
                 )
                 lines.append(rewrite_headings(report_raw, add=2).rstrip())
