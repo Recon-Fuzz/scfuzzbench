@@ -30,7 +30,7 @@ variable "public_subnet_cidr" {
 
 variable "availability_zone" {
   type        = string
-  description = "Optional AZ for the public subnet (set to avoid unsupported instance types)."
+  description = "Optional AZ for the public subnet. If unset, pick an AZ that supports instance_type."
   default     = ""
 }
 
