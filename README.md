@@ -80,6 +80,25 @@ make terraform-init
 make terraform-deploy TF_ARGS="-var 'ssh_cidr=YOUR_IP/32' -var 'target_repo_url=REPO_URL' -var 'target_commit=COMMIT'"
 ```
 
+### Local `.env` (recommended)
+
+For repeatable local runs, keep a gitignored `.env` with your `AWS_PROFILE`,
+Makefile variables, and `TF_VAR_*` Terraform variables:
+
+```bash
+# Usage: source .env
+export AWS_PROFILE="your-profile"
+export EXISTING_BUCKET="scfuzzbench-logs-..."
+export TF_VAR_target_repo_url="https://github.com/org/repo"
+export TF_VAR_target_commit="..."
+export TF_VAR_timeout_hours=1
+export TF_VAR_instances_per_fuzzer=4
+export TF_VAR_disabled_fuzzers='["echidna-symexec"]'
+export TF_VAR_git_token_ssm_parameter_name="/scfuzzbench/recon/github_token"
+export TF_VAR_foundry_git_repo="https://github.com/your-org/foundry"
+export TF_VAR_foundry_git_ref="master"
+```
+
 ## Re-run a benchmark
 
 Instances are one-shot: after `run.sh` completes they upload artifacts and stop
@@ -153,6 +172,10 @@ DEST="$(mktemp -d /tmp/scfuzzbench-analysis-1770053924-XXXXXX)"
 make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<benchmark_uuid> DEST="$DEST" ARTIFACT_CATEGORY=both
 ```
 
+Notes:
+- `timeout_hours` applies to the *fuzzer command* only; cloning, dependency install, and builds happen before the timeout.
+- A run is usually "ready" once the logs prefix contains `manifest.json` plus one logs zip per instance.
+
 Outputs under `DEST`:
 - Prepared per-instance logs: `analysis/`
 - CSVs: `data/`
@@ -218,6 +241,16 @@ make report-benchmark REPORT_CSV=results.csv REPORT_OUT_DIR=report_out REPORT_BU
 If you need to clone a private target repo, store a short-lived token in SSM
 and set `git_token_ssm_parameter_name` so the instances can fetch it without
 embedding secrets in user-data logs.
+
+Update the token value:
+
+```bash
+aws ssm put-parameter \
+  --name "/scfuzzbench/recon/github_token" \
+  --type "SecureString" \
+  --value "$GITHUB_TOKEN" \
+  --overwrite
+```
 
 Notes:
 - For public repos, leave `git_token_ssm_parameter_name` empty. If it is set,
