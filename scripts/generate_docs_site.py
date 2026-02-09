@@ -250,7 +250,7 @@ def main() -> int:
     home_lines.append("")
     home_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
     home_lines.append("")
-    home_lines.append("::: info Completeness rule")
+    home_lines.append("::: tip Completeness rule")
     home_lines.append("The site lists **only complete runs** (timeout + 1h grace).")
     home_lines.append("Complete runs missing analysis are kept visible with warnings for later triage.")
     home_lines.append(":::")
@@ -445,12 +445,13 @@ def main() -> int:
             lines.append("::: warning Missing analysis")
             lines.append("This run is **complete** by time rule but is missing published analysis artifacts.")
             lines.append("It likely needs a manual **Benchmark Release** re-run or manual analysis + upload.")
-            lines.append("See [Ops notes](../../../ops/).")
+            lines.append("See [Ops notes](/ops).")
             lines.append(":::")
             lines.append("")
         elif r.analysis_kind == "reports":
-            lines.append("!!! info")
-            lines.append("    This run's analysis artifacts are stored under the legacy `reports/` prefix.")
+            lines.append("::: tip Legacy analysis")
+            lines.append("This run's analysis artifacts are stored under the legacy `reports/` prefix.")
+            lines.append(":::")
             lines.append("")
 
         # Manifest summary.
