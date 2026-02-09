@@ -175,6 +175,14 @@ make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<
 Notes:
 - `timeout_hours` applies to the *fuzzer command* only; cloning, dependency install, and builds happen before the timeout.
 - A run is usually "ready" once the logs prefix contains `manifest.json` plus one logs zip per instance.
+- Quick readiness check (returns `0` until uploads start):
+
+```bash
+aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "logs/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
+aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "corpus/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
+```
+
+Corpus note: by default, Echidna and Medusa upload corpus zips; Foundry uploads logs only.
 
 Outputs under `DEST`:
 - Prepared per-instance logs: `analysis/`
