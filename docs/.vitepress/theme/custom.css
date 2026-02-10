@@ -401,6 +401,17 @@
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
+.vp-doc a.sb-start__button,
+.vp-doc a.sb-start__button:visited {
+  color: #061018;
+  text-decoration: none;
+}
+
+.vp-doc a.sb-start__button:hover {
+  color: #061018;
+  text-decoration: none;
+}
+
 .sb-start__button:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 40px rgba(45, 212, 191, 0.18);

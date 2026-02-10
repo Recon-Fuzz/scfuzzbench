@@ -30,9 +30,9 @@ export default defineConfig({
 
   themeConfig: {
     nav: [
-      { text: "Start benchmark", link: "/start" },
       { text: "Runs", link: "/runs/" },
       { text: "Benchmarks", link: "/benchmarks/" },
+      { text: "Start benchmark", link: "/start" },
       { text: "Ops", link: "/ops" },
       { text: "GitHub", link: "https://github.com/Recon-Fuzz/scfuzzbench" },
     ],
@@ -41,9 +41,9 @@ export default defineConfig({
       {
         text: "Explore",
         items: [
-          { text: "Start Benchmark", link: "/start" },
           { text: "Runs", link: "/runs/" },
           { text: "Benchmarks", link: "/benchmarks/" },
+          { text: "Start Benchmark", link: "/start" },
           { text: "Ops Notes", link: "/ops" },
         ],
       },
