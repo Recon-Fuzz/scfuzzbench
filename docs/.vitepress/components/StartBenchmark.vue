@@ -43,9 +43,10 @@ const allFuzzerKeys = orderFuzzers(
     .filter((name): name is string => Boolean(name))
 );
 
-// Keep echidna-symexec hidden from the UI; it remains disabled unless explicitly enabled elsewhere.
-const selectableFuzzerKeys = allFuzzerKeys.filter((name) => name !== "echidna-symexec");
-const selectedFuzzerKeys = ref<string[]>([...selectableFuzzerKeys]);
+const selectableFuzzerKeys = allFuzzerKeys;
+const selectedFuzzerKeys = ref<string[]>(
+  allFuzzerKeys.filter((name) => name !== "echidna-symexec")
+);
 
 const disabledFuzzerKeys = computed(() => {
   const selected = new Set(selectedFuzzerKeys.value);
