@@ -31,6 +31,10 @@ on:
         required: true
         type: number
         default: 24
+      disabled_fuzzers_json:
+        description: "JSON list of fuzzer keys to disable (optional)."
+        required: false
+        default: '["echidna-symexec"]'
       foundry_version:
         description: "Override Foundry version (optional)."
         required: false
@@ -97,6 +101,11 @@ on:
         required: false
         type: number
         default: 24
+      disabled_fuzzers_json:
+        description: "JSON list of fuzzer keys to disable (optional)."
+        required: false
+        type: string
+        default: '["echidna-symexec"]'
       foundry_version:
         description: "Override Foundry version (optional)."
         required: false
@@ -247,6 +256,7 @@ jobs:
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
+          DISABLED_FUZZERS_JSON: ${{ inputs.disabled_fuzzers_json }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
@@ -353,6 +363,28 @@ jobs:
               raise SystemExit("timeout_hours must be in [0.25, 72]")
           PY
 
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          raw = os.environ.get("DISABLED_FUZZERS_JSON", "").strip()
+          if not raw:
+              raw = "[]"
+          try:
+              obj = json.loads(raw)
+          except Exception as e:
+              raise SystemExit(f"disabled_fuzzers_json must be valid JSON: {e}")
+          if not isinstance(obj, list):
+              raise SystemExit("disabled_fuzzers_json must be a JSON list")
+          if len(obj) > 20:
+              raise SystemExit("disabled_fuzzers_json has too many entries (max 20)")
+          key_re = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+          for v in obj:
+              if not isinstance(v, str) or not key_re.match(v):
+                  raise SystemExit(f"Invalid disabled fuzzer key: {v!r}")
+          PY
+
           if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
             require_safe "git_token_ssm_parameter_name" "${GIT_TOKEN_SSM_PARAMETER_NAME}"
             if [[ ! "${GIT_TOKEN_SSM_PARAMETER_NAME}" =~ ^/scfuzzbench/[A-Za-z0-9_./-]+$ ]]; then
@@ -407,6 +439,7 @@ jobs:
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
+          DISABLED_FUZZERS_JSON: ${{ inputs.disabled_fuzzers_json }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
@@ -419,6 +452,10 @@ jobs:
         run: |
           set -euo pipefail
           run_id=$(date +%s)
+          disabled_fuzzers="${DISABLED_FUZZERS_JSON:-}"
+          if [[ -z "${disabled_fuzzers}" ]]; then
+            disabled_fuzzers="[]"
+          fi
           tf_args=(
             -var "aws_region=${AWS_REGION}"
             -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
@@ -428,6 +465,7 @@ jobs:
             -var "instance_type=${INSTANCE_TYPE}"
             -var "instances_per_fuzzer=${INSTANCES_PER_FUZZER}"
             -var "timeout_hours=${TIMEOUT_HOURS}"
+            -var "disabled_fuzzers=${disabled_fuzzers}"
             -var "run_id=${run_id}"
             -var "scfuzzbench_commit=${GITHUB_SHA}"
           )

@@ -17,6 +17,9 @@ const instanceType = ref("c6a.4xlarge");
 const instancesPerFuzzer = ref(4);
 const timeoutHours = ref(1);
 
+// Defaults to off: symexec runs are slower/more finicky, so we disable by default.
+const includeEchidnaSymexec = ref(false);
+
 // Advanced / optional overrides.
 const foundryVersion = ref("");
 const foundryGitRepo = ref("https://github.com/aviggiano/foundry");
@@ -32,6 +35,8 @@ const propertiesPath = ref("");
 const fuzzerEnvJson = ref("");
 
 const requestJson = computed(() => {
+  const disabledFuzzers = includeEchidnaSymexec.value ? [] : ["echidna-symexec"];
+
   const payload: Record<string, unknown> = {
     target_repo_url: targetRepoUrl.value.trim(),
     target_commit: targetCommit.value.trim(),
@@ -39,6 +44,7 @@ const requestJson = computed(() => {
     instance_type: instanceType.value.trim(),
     instances_per_fuzzer: instancesPerFuzzer.value,
     timeout_hours: timeoutHours.value,
+    disabled_fuzzers: disabledFuzzers,
 
     foundry_version: foundryVersion.value.trim(),
     foundry_git_repo: foundryGitRepo.value.trim(),
@@ -143,6 +149,13 @@ const showAdvanced = ref(false);
             max="72"
             step="0.25"
           />
+        </label>
+
+        <label class="sb-start__field sb-start__field--full sb-start__toggle">
+          <input v-model="includeEchidnaSymexec" class="sb-start__toggle-input" type="checkbox" />
+          <span class="sb-start__toggle-label">
+            Include <code>echidna-symexec</code> (experimental, slower)
+          </span>
         </label>
       </div>
 
