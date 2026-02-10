@@ -1,0 +1,507 @@
+name: Benchmark Request
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: benchmark-request-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      is_request: ${{ steps.prepare.outputs.is_request }}
+      should_run: ${{ steps.prepare.outputs.should_run }}
+      target_repo_url: ${{ steps.prepare.outputs.target_repo_url }}
+      target_commit: ${{ steps.prepare.outputs.target_commit }}
+      benchmark_type: ${{ steps.prepare.outputs.benchmark_type }}
+      instance_type: ${{ steps.prepare.outputs.instance_type }}
+      instances_per_fuzzer: ${{ steps.prepare.outputs.instances_per_fuzzer }}
+      timeout_hours: ${{ steps.prepare.outputs.timeout_hours }}
+      foundry_version: ${{ steps.prepare.outputs.foundry_version }}
+      foundry_git_repo: ${{ steps.prepare.outputs.foundry_git_repo }}
+      foundry_git_ref: ${{ steps.prepare.outputs.foundry_git_ref }}
+      echidna_version: ${{ steps.prepare.outputs.echidna_version }}
+      medusa_version: ${{ steps.prepare.outputs.medusa_version }}
+      bitwuzla_version: ${{ steps.prepare.outputs.bitwuzla_version }}
+      git_token_ssm_parameter_name: ${{ steps.prepare.outputs.git_token_ssm_parameter_name }}
+      properties_path: ${{ steps.prepare.outputs.properties_path }}
+      fuzzer_env_json: ${{ steps.prepare.outputs.fuzzer_env_json }}
+    steps:
+      - name: Parse and validate benchmark request
+        id: prepare
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue = context.payload.issue;
+            const issue_number = issue.number;
+
+            const BOT_MARKER = "<!-- scfuzzbench-benchmark-request-bot -->";
+            const REQ_MARKER = "scfuzzbench-benchmark-request:v1";
+            const LABEL_NEEDS = "benchmark/needs-approval";
+            const LABEL_APPROVED = "benchmark/approved";
+
+            function uniq(arr) {
+              return Array.from(new Set(arr));
+            }
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
+              } catch (e) {
+                // 422: already exists. Anything else is worth surfacing.
+                if (e.status !== 422) throw e;
+              }
+            }
+
+            async function listIssueComments() {
+              return await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+            }
+
+            async function upsertBotComment(markdown) {
+              const body = `${BOT_MARKER}\n${markdown}`.trim() + "\n";
+              const comments = await listIssueComments();
+              const existing = comments.find((c) => (c.body || "").includes(BOT_MARKER));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            }
+
+            async function setLabels({ add = [], remove = [] }) {
+              const current = (issue.labels || [])
+                .map((l) => (typeof l === "string" ? l : l.name))
+                .filter(Boolean);
+
+              const want = uniq(current.filter((l) => !remove.includes(l)).concat(add));
+              if (want.sort().join(",") === current.sort().join(",")) return;
+
+              await github.rest.issues.setLabels({ owner, repo, issue_number, labels: want });
+            }
+
+            function fail(message) {
+              return { ok: false, message };
+            }
+
+            function ok(value) {
+              return { ok: true, value };
+            }
+
+            function asString(v) {
+              if (v === null || v === undefined) return "";
+              if (typeof v === "string") return v;
+              return String(v);
+            }
+
+            function mustString(payload, key, { required = false, maxLen = 400 } = {}) {
+              const raw = payload[key];
+              const s = asString(raw).trim();
+              if (!s && required) return fail(`Missing required field: ${key}`);
+              if (s.length > maxLen) return fail(`${key} too long (max ${maxLen} chars)`);
+              if (s.includes("\n") || s.includes("\r")) return fail(`${key} must be a single line`);
+              return ok(s);
+            }
+
+            function mustNumber(payload, key, { required = false, min = 0, max = 1e9, integer = false } = {}) {
+              const raw = payload[key];
+              if ((raw === null || raw === undefined || raw === "") && required) return fail(`Missing required field: ${key}`);
+              if (raw === null || raw === undefined || raw === "") return ok(null);
+              const n = Number(raw);
+              if (!Number.isFinite(n)) return fail(`${key} must be a number`);
+              if (integer && !Number.isInteger(n)) return fail(`${key} must be an integer`);
+              if (n < min) return fail(`${key} must be >= ${min}`);
+              if (n > max) return fail(`${key} must be <= ${max}`);
+              return ok(n);
+            }
+
+            function mustMatch(value, key, re, hint) {
+              if (!value) return ok(value);
+              if (!re.test(value)) return fail(`${key} is invalid${hint ? ` (${hint})` : ""}`);
+              return ok(value);
+            }
+
+            function parseOuterJsonRequest(body) {
+              const m = body.match(/```json\\s*([\\s\\S]*?)\\s*```/i);
+              if (!m) return fail("Missing ```json code block with request payload.");
+              try {
+                const obj = JSON.parse(m[1]);
+                if (!obj || typeof obj !== "object" || Array.isArray(obj)) return fail("Request JSON must be an object.");
+                return ok(obj);
+              } catch (e) {
+                return fail(`Invalid JSON in request block: ${e.message}`);
+              }
+            }
+
+            function parseInnerEnvJson(raw) {
+              const s = (raw || "").trim();
+              if (!s) return ok("");
+              let obj;
+              try {
+                obj = JSON.parse(s);
+              } catch (e) {
+                return fail(`fuzzer_env_json must be valid JSON (stringified object): ${e.message}`);
+              }
+              if (!obj || typeof obj !== "object" || Array.isArray(obj)) return fail("fuzzer_env_json must be a JSON object.");
+
+              const keys = Object.keys(obj);
+              if (keys.length > 64) return fail("fuzzer_env_json has too many keys (max 64).");
+
+              for (const k of keys) {
+                if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) return fail(`Invalid fuzzer env key: ${k}`);
+                const v = obj[k];
+                if (typeof v !== "string") return fail(`Env value for ${k} must be a string`);
+                if (v.length > 2000) return fail(`Env value for ${k} too long (max 2000 chars)`);
+                // Values are rendered into user-data as: export KEY="VALUE"
+                // Keep this conservative to avoid shell injection and quoting pitfalls.
+                if (/[\\r\\n\"`$\\\\]/.test(v)) return fail(`Env value for ${k} contains a forbidden character`);
+              }
+              return ok(JSON.stringify(obj));
+            }
+
+            const bodyText = String(issue.body || "");
+            const isRequest = bodyText.includes(REQ_MARKER);
+            core.setOutput("is_request", isRequest ? "true" : "false");
+            core.setOutput("should_run", "false");
+
+            if (!isRequest) {
+              return;
+            }
+
+            // Ensure labels exist so the UI link + automation can apply them reliably.
+            await ensureLabel(LABEL_NEEDS, "d4c5f9", "Benchmark request awaiting approval.");
+            await ensureLabel(LABEL_APPROVED, "0e8a16", "Benchmark request approved.");
+
+            const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const authorAssociation = String(issue.author_association || "");
+            if (!allowedAssociations.has(authorAssociation)) {
+              await upsertBotComment(
+                [
+                  "## Benchmark request rejected",
+                  "",
+                  `Issue author association \`${authorAssociation}\` is not allowed to request benchmarks.`,
+                  "",
+                  "Allowed: `OWNER`, `MEMBER`, `COLLABORATOR`.",
+                ].join("\\n")
+              );
+              await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
+              return;
+            }
+
+            const parsed = parseOuterJsonRequest(bodyText);
+            if (!parsed.ok) {
+              await setLabels({ add: [LABEL_NEEDS], remove: [LABEL_APPROVED] });
+              await upsertBotComment(
+                [
+                  "## Benchmark request needs changes",
+                  "",
+                  parsed.message,
+                  "",
+                  `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                ].join("\\n")
+              );
+              return;
+            }
+
+            const payload = parsed.value;
+
+            const errors = [];
+
+            const url = mustString(payload, "target_repo_url", { required: true, maxLen: 300 });
+            if (!url.ok) errors.push(url.message);
+            const commit = mustString(payload, "target_commit", { required: true, maxLen: 200 });
+            if (!commit.ok) errors.push(commit.message);
+
+            const btype = mustString(payload, "benchmark_type", { required: true, maxLen: 32 });
+            if (!btype.ok) errors.push(btype.message);
+
+            const itype = mustString(payload, "instance_type", { required: true, maxLen: 32 });
+            if (!itype.ok) errors.push(itype.message);
+
+            const inst = mustNumber(payload, "instances_per_fuzzer", { required: true, min: 1, max: 20, integer: true });
+            if (!inst.ok) errors.push(inst.message);
+
+            const hours = mustNumber(payload, "timeout_hours", { required: true, min: 0.25, max: 72, integer: false });
+            if (!hours.ok) errors.push(hours.message);
+
+            const githubRepoUrlRe = /^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+(?:\\.git)?\\/?$/;
+            if (url.ok) {
+              const urlMatch = mustMatch(url.value, "target_repo_url", githubRepoUrlRe, "expected https://github.com/<org>/<repo>");
+              if (!urlMatch.ok) errors.push(urlMatch.message);
+            }
+
+            const commitRe = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+            if (commit.ok) {
+              const commitMatch = mustMatch(commit.value, "target_commit", commitRe, "use a commit SHA, tag, or branch (no spaces)");
+              if (!commitMatch.ok) errors.push(commitMatch.message);
+            }
+
+            const bt = btype.ok ? btype.value : "";
+            if (btype.ok && bt !== "property" && bt !== "optimization") {
+              errors.push("benchmark_type must be 'property' or 'optimization'");
+            }
+
+            const instanceTypeRe = /^[a-z0-9]+\\.[a-z0-9]+$/;
+            if (itype.ok) {
+              const itMatch = mustMatch(itype.value, "instance_type", instanceTypeRe, "expected like c6a.4xlarge");
+              if (!itMatch.ok) errors.push(itMatch.message);
+            }
+
+            // Optional fields.
+            const foundry_version = mustString(payload, "foundry_version", { required: false, maxLen: 64 });
+            if (!foundry_version.ok) errors.push(foundry_version.message);
+            if (foundry_version.ok && foundry_version.value) {
+              const mv = mustMatch(foundry_version.value, "foundry_version", /^[A-Za-z0-9._+-]+$/, "avoid spaces/shell metacharacters");
+              if (!mv.ok) errors.push(mv.message);
+            }
+
+            const foundry_git_repo = mustString(payload, "foundry_git_repo", { required: false, maxLen: 300 });
+            if (!foundry_git_repo.ok) errors.push(foundry_git_repo.message);
+            if (foundry_git_repo.ok && foundry_git_repo.value) {
+              const mr = mustMatch(foundry_git_repo.value, "foundry_git_repo", githubRepoUrlRe, "expected https://github.com/<org>/<repo>");
+              if (!mr.ok) errors.push(mr.message);
+            }
+
+            const foundry_git_ref = mustString(payload, "foundry_git_ref", { required: false, maxLen: 200 });
+            if (!foundry_git_ref.ok) errors.push(foundry_git_ref.message);
+            if (foundry_git_ref.ok && foundry_git_ref.value) {
+              const mref = mustMatch(foundry_git_ref.value, "foundry_git_ref", /^[A-Za-z0-9._/-]+$/, "no spaces");
+              if (!mref.ok) errors.push(mref.message);
+            }
+
+            const echidna_version = mustString(payload, "echidna_version", { required: false, maxLen: 32 });
+            if (!echidna_version.ok) errors.push(echidna_version.message);
+            const medusa_version = mustString(payload, "medusa_version", { required: false, maxLen: 32 });
+            if (!medusa_version.ok) errors.push(medusa_version.message);
+            const bitwuzla_version = mustString(payload, "bitwuzla_version", { required: false, maxLen: 32 });
+            if (!bitwuzla_version.ok) errors.push(bitwuzla_version.message);
+
+            const git_token_ssm_parameter_name = mustString(payload, "git_token_ssm_parameter_name", { required: false, maxLen: 200 });
+            if (!git_token_ssm_parameter_name.ok) errors.push(git_token_ssm_parameter_name.message);
+            if (git_token_ssm_parameter_name.ok && git_token_ssm_parameter_name.value) {
+              const mssm = mustMatch(
+                git_token_ssm_parameter_name.value,
+                "git_token_ssm_parameter_name",
+                /^\\/[A-Za-z0-9_./-]+$/,
+                "expected SSM parameter path like /scfuzzbench/... (no spaces)"
+              );
+              if (!mssm.ok) errors.push(mssm.message);
+              if (mssm.ok && !git_token_ssm_parameter_name.value.startsWith("/scfuzzbench/")) {
+                errors.push("git_token_ssm_parameter_name must start with /scfuzzbench/");
+              }
+            }
+
+            const properties_path = mustString(payload, "properties_path", { required: false, maxLen: 200 });
+            if (!properties_path.ok) errors.push(properties_path.message);
+            if (properties_path.ok && properties_path.value) {
+              if (properties_path.value.startsWith("/")) {
+                errors.push("properties_path must be repo-relative (must not start with /)");
+              } else if (properties_path.value.includes("..")) {
+                errors.push("properties_path must not contain '..'");
+              } else {
+                const mpp = mustMatch(properties_path.value, "properties_path", /^[A-Za-z0-9_./-]+$/, "no spaces");
+                if (!mpp.ok) errors.push(mpp.message);
+              }
+            }
+
+            const fuzzer_env_json_raw = mustString(payload, "fuzzer_env_json", { required: false, maxLen: 8000 });
+            if (!fuzzer_env_json_raw.ok) errors.push(fuzzer_env_json_raw.message);
+            const fuzzer_env_json = fuzzer_env_json_raw.ok ? parseInnerEnvJson(fuzzer_env_json_raw.value) : ok("");
+            if (!fuzzer_env_json.ok) errors.push(fuzzer_env_json.message);
+
+            const action = String(context.payload.action || "");
+            const labelName = context.payload.label ? String(context.payload.label.name || "") : "";
+            const issueState = String(issue.state || "open");
+
+            if (errors.length > 0) {
+              await setLabels({ add: [LABEL_NEEDS], remove: [LABEL_APPROVED] });
+              await upsertBotComment(
+                [
+                  "## Benchmark request needs changes",
+                  "",
+                  "Validation errors:",
+                  "",
+                  ...errors.map((e) => `- ${e}`),
+                  "",
+                  `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                ].join("\\n")
+              );
+              return;
+            }
+
+            // All requests require approval. Any edit resets approval.
+            if (action === "opened" || action === "edited") {
+              const removeApproved = action === "edited" ? [LABEL_APPROVED] : [];
+              await setLabels({ add: [LABEL_NEEDS], remove: removeApproved });
+
+              await upsertBotComment(
+                [
+                  "## Benchmark request queued",
+                  "",
+                  "Request is valid and waiting for approval.",
+                  "",
+                  "Summary:",
+                  `- Target: \`${url.value}\``,
+                  `- Ref: \`${commit.value}\``,
+                  `- Type: \`${bt}\``,
+                  `- Instance type: \`${itype.value}\``,
+                  `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Timeout hours: \`${hours.value}\``,
+                  "",
+                  `To start: change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                  action === "edited" ? "" : "",
+                ].join("\\n").trim()
+              );
+            }
+
+            // Only run when the *approved* label is added, and the issue is still open.
+            if (action === "labeled" && labelName === LABEL_APPROVED && issueState === "open") {
+              await setLabels({ add: [LABEL_APPROVED], remove: [LABEL_NEEDS] });
+              await upsertBotComment(
+                [
+                  "## Benchmark request approved",
+                  "",
+                  `Approved by @${context.actor}. Starting benchmark run...`,
+                  "",
+                  "Resolved inputs:",
+                  `- Target: \`${url.value}\``,
+                  `- Ref: \`${commit.value}\``,
+                  `- Type: \`${bt}\``,
+                  `- Instance type: \`${itype.value}\``,
+                  `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Timeout hours: \`${hours.value}\``,
+                ].join("\\n")
+              );
+
+              core.setOutput("should_run", "true");
+
+              core.setOutput("target_repo_url", url.value);
+              core.setOutput("target_commit", commit.value);
+              core.setOutput("benchmark_type", bt);
+              core.setOutput("instance_type", itype.value);
+              core.setOutput("instances_per_fuzzer", String(inst.value));
+              core.setOutput("timeout_hours", String(hours.value));
+
+              core.setOutput("foundry_version", foundry_version.ok ? foundry_version.value : "");
+              core.setOutput("foundry_git_repo", foundry_git_repo.ok ? foundry_git_repo.value : "");
+              core.setOutput("foundry_git_ref", foundry_git_ref.ok ? foundry_git_ref.value : "");
+              core.setOutput("echidna_version", echidna_version.ok ? echidna_version.value : "");
+              core.setOutput("medusa_version", medusa_version.ok ? medusa_version.value : "");
+              core.setOutput("bitwuzla_version", bitwuzla_version.ok ? bitwuzla_version.value : "");
+              core.setOutput("git_token_ssm_parameter_name", git_token_ssm_parameter_name.ok ? git_token_ssm_parameter_name.value : "");
+              core.setOutput("properties_path", properties_path.ok ? properties_path.value : "");
+              core.setOutput("fuzzer_env_json", fuzzer_env_json.ok ? fuzzer_env_json.value : "");
+            }
+
+  benchmark-run:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.should_run == 'true' }}
+    uses: ./.github/workflows/benchmark-run.yml
+    secrets: inherit
+    with:
+      target_repo_url: ${{ needs.prepare.outputs.target_repo_url }}
+      target_commit: ${{ needs.prepare.outputs.target_commit }}
+      benchmark_type: ${{ needs.prepare.outputs.benchmark_type }}
+      instance_type: ${{ needs.prepare.outputs.instance_type }}
+      instances_per_fuzzer: ${{ fromJSON(needs.prepare.outputs.instances_per_fuzzer) }}
+      timeout_hours: ${{ fromJSON(needs.prepare.outputs.timeout_hours) }}
+      foundry_version: ${{ needs.prepare.outputs.foundry_version }}
+      foundry_git_repo: ${{ needs.prepare.outputs.foundry_git_repo }}
+      foundry_git_ref: ${{ needs.prepare.outputs.foundry_git_ref }}
+      echidna_version: ${{ needs.prepare.outputs.echidna_version }}
+      medusa_version: ${{ needs.prepare.outputs.medusa_version }}
+      bitwuzla_version: ${{ needs.prepare.outputs.bitwuzla_version }}
+      git_token_ssm_parameter_name: ${{ needs.prepare.outputs.git_token_ssm_parameter_name }}
+      properties_path: ${{ needs.prepare.outputs.properties_path }}
+      fuzzer_env_json: ${{ needs.prepare.outputs.fuzzer_env_json }}
+
+  finalize:
+    needs: [prepare, benchmark-run]
+    if: ${{ always() && needs.prepare.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comment result (and close on success)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue = context.payload.issue;
+            const issue_number = issue.number;
+
+            const BOT_MARKER = "<!-- scfuzzbench-benchmark-request-bot -->";
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            async function listIssueComments() {
+              return await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+            }
+
+            async function upsertBotComment(markdown) {
+              const body = `${BOT_MARKER}\n${markdown}`.trim() + "\n";
+              const comments = await listIssueComments();
+              const existing = comments.find((c) => (c.body || "").includes(BOT_MARKER));
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            }
+
+            const result = "${{ needs['benchmark-run'].result }}";
+            if (result !== "success") {
+              await upsertBotComment(
+                [
+                  "## Benchmark dispatch failed",
+                  "",
+                  `Workflow run: ${runUrl}`,
+                  "",
+                  "A maintainer can fix the request or re-apply the `benchmark/approved` label to retry.",
+                ].join("\\n")
+              );
+              return;
+            }
+
+            const bucket = "${{ needs['benchmark-run'].outputs.bucket_name }}";
+            const run_id = "${{ needs['benchmark-run'].outputs.run_id }}";
+            const benchmark_uuid = "${{ needs['benchmark-run'].outputs.benchmark_uuid }}";
+            const docsUrl = `https://scfuzzbench.com/runs/${run_id}/${benchmark_uuid}/`;
+
+            await upsertBotComment(
+              [
+                "## Benchmark started",
+                "",
+                `Workflow run: ${runUrl}`,
+                "",
+                "Run metadata:",
+                `- Bucket: \\`${bucket}\\``,
+                `- Run ID: \\`${run_id}\\``,
+                `- Benchmark UUID: \\`${benchmark_uuid}\\``,
+                "",
+                "Docs:",
+                `- ${docsUrl}`,
+                "",
+                "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
+              ].join("\\n")
+            );
+
+            await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });

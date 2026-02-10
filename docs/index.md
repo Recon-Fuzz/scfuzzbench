@@ -9,6 +9,9 @@ hero:
       text: Browse runs
       link: /runs/
     - theme: alt
+      text: Start benchmark
+      link: /start
+    - theme: alt
       text: Ops notes
       link: /ops
 features:

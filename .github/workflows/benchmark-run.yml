@@ -67,6 +67,102 @@ on:
         description: "JSON map of extra fuzzer env vars (optional)."
         required: false
         default: ""
+  workflow_call:
+    inputs:
+      target_repo_url:
+        description: "Target repository URL."
+        required: true
+        type: string
+      target_commit:
+        description: "Target repository commit hash."
+        required: true
+        type: string
+      benchmark_type:
+        description: "Benchmark type."
+        required: false
+        type: string
+        default: property
+      instance_type:
+        description: "EC2 instance type."
+        required: false
+        type: string
+        default: c6a.8xlarge
+      instances_per_fuzzer:
+        description: "Number of instances per fuzzer."
+        required: false
+        type: number
+        default: 10
+      timeout_hours:
+        description: "Timeout per fuzzer run (hours)."
+        required: false
+        type: number
+        default: 24
+      foundry_version:
+        description: "Override Foundry version (optional)."
+        required: false
+        type: string
+        default: ""
+      foundry_git_repo:
+        description: "Optional Foundry git repo (build from source)."
+        required: false
+        type: string
+        default: ""
+      foundry_git_ref:
+        description: "Optional Foundry git ref (branch/tag/commit)."
+        required: false
+        type: string
+        default: ""
+      echidna_version:
+        description: "Override Echidna version (optional)."
+        required: false
+        type: string
+        default: ""
+      medusa_version:
+        description: "Override Medusa version (optional)."
+        required: false
+        type: string
+        default: ""
+      bitwuzla_version:
+        description: "Override Bitwuzla version (optional)."
+        required: false
+        type: string
+        default: ""
+      git_token_ssm_parameter_name:
+        description: "SSM parameter name for Git token (optional)."
+        required: false
+        type: string
+        default: ""
+      properties_path:
+        description: "Repo-relative properties path for benchmark mode switching (optional)."
+        required: false
+        type: string
+        default: ""
+      fuzzer_env_json:
+        description: "JSON map of extra fuzzer env vars (optional)."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      SCFUZZBENCH_BUCKET:
+        required: true
+      TF_BACKEND_CONFIG:
+        required: true
+      AWS_REGION:
+        required: false
+    outputs:
+      bucket_name:
+        description: "S3 bucket used for run artifacts."
+        value: ${{ jobs.benchmark-run.outputs.bucket_name }}
+      run_id:
+        description: "Run ID (Unix timestamp)."
+        value: ${{ jobs.benchmark-run.outputs.run_id }}
+      benchmark_uuid:
+        description: "Benchmark UUID (derived from manifest)."
+        value: ${{ jobs.benchmark-run.outputs.benchmark_uuid }}
 
 permissions:
   contents: read
@@ -74,6 +170,10 @@ permissions:
 jobs:
   benchmark-run:
     runs-on: ubuntu-latest
+    outputs:
+      bucket_name: ${{ steps.tf_outputs.outputs.bucket_name }}
+      run_id: ${{ steps.tf_outputs.outputs.run_id }}
+      benchmark_uuid: ${{ steps.tf_outputs.outputs.benchmark_uuid }}
     env:
       AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
@@ -139,9 +239,181 @@ jobs:
       - name: Terraform init (remote backend)
         run: make terraform-init-backend BACKEND_CONFIG=backend.hcl
 
+      - name: Validate inputs
+        env:
+          TARGET_REPO_URL: ${{ inputs.target_repo_url }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          BENCHMARK_TYPE: ${{ inputs.benchmark_type }}
+          INSTANCE_TYPE: ${{ inputs.instance_type }}
+          INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
+          FOUNDRY_VERSION: ${{ inputs.foundry_version }}
+          FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
+          FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
+          ECHIDNA_VERSION: ${{ inputs.echidna_version }}
+          MEDUSA_VERSION: ${{ inputs.medusa_version }}
+          BITWUZLA_VERSION: ${{ inputs.bitwuzla_version }}
+          GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
+          PROPERTIES_PATH: ${{ inputs.properties_path }}
+          FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "Invalid input: $1" >&2
+            exit 1
+          }
+
+          is_single_line() {
+            [[ "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+          }
+
+          # These values are interpolated into Terraform args and later into user-data.
+          # Keep them conservative to avoid shell-quoting surprises.
+          has_forbidden_chars() {
+            local s="$1"
+            [[ "$s" == *'"'* || "$s" == *'`'* || "$s" == *'$'* || "$s" == *'\\'* ]]
+          }
+
+          require_safe() {
+            local name="$1"
+            local value="$2"
+            if ! is_single_line "$value"; then
+              fail "${name} must be a single line"
+            fi
+            if has_forbidden_chars "$value"; then
+              fail "${name} contains a forbidden character (\", \\\\, $, `)"
+            fi
+          }
+
+          require_safe "target_repo_url" "${TARGET_REPO_URL}"
+          require_safe "target_commit" "${TARGET_COMMIT}"
+          require_safe "benchmark_type" "${BENCHMARK_TYPE}"
+          require_safe "instance_type" "${INSTANCE_TYPE}"
+
+          if [[ -n "${FOUNDRY_VERSION}" ]]; then
+            require_safe "foundry_version" "${FOUNDRY_VERSION}"
+            if [[ ! "${FOUNDRY_VERSION}" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+              fail "foundry_version must not contain spaces"
+            fi
+          fi
+
+          if [[ -n "${FOUNDRY_GIT_REPO}" ]]; then
+            require_safe "foundry_git_repo" "${FOUNDRY_GIT_REPO}"
+            if [[ ! "${FOUNDRY_GIT_REPO}" =~ ^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?/?$ ]]; then
+              fail "foundry_git_repo must be https://github.com/<org>/<repo>"
+            fi
+          fi
+
+          if [[ -n "${FOUNDRY_GIT_REF}" ]]; then
+            require_safe "foundry_git_ref" "${FOUNDRY_GIT_REF}"
+            if [[ ! "${FOUNDRY_GIT_REF}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              fail "foundry_git_ref must not contain spaces"
+            fi
+          fi
+
+          if [[ -n "${ECHIDNA_VERSION}" ]]; then
+            require_safe "echidna_version" "${ECHIDNA_VERSION}"
+          fi
+          if [[ -n "${MEDUSA_VERSION}" ]]; then
+            require_safe "medusa_version" "${MEDUSA_VERSION}"
+          fi
+          if [[ -n "${BITWUZLA_VERSION}" ]]; then
+            require_safe "bitwuzla_version" "${BITWUZLA_VERSION}"
+          fi
+
+          if [[ ! "${TARGET_REPO_URL}" =~ ^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?/?$ ]]; then
+            fail "target_repo_url must be https://github.com/<org>/<repo>"
+          fi
+
+          if [[ ! "${TARGET_COMMIT}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]]; then
+            fail "target_commit must be a commit SHA, tag, or branch (no spaces)"
+          fi
+
+          case "${BENCHMARK_TYPE}" in
+            property|optimization) ;;
+            *) fail "benchmark_type must be property or optimization" ;;
+          esac
+
+          if [[ ! "${INSTANCE_TYPE}" =~ ^[a-z0-9]+\\.[a-z0-9]+$ ]]; then
+            fail "instance_type must look like c6a.4xlarge"
+          fi
+
+          if [[ ! "${INSTANCES_PER_FUZZER}" =~ ^[0-9]+$ ]] || (( INSTANCES_PER_FUZZER < 1 )) || (( INSTANCES_PER_FUZZER > 20 )); then
+            fail "instances_per_fuzzer must be an integer in [1, 20]"
+          fi
+
+          if [[ ! "${TIMEOUT_HOURS}" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then
+            fail "timeout_hours must be a number"
+          fi
+          python3 - <<'PY'
+          import os
+          hours = float(os.environ["TIMEOUT_HOURS"])
+          if hours < 0.25 or hours > 72:
+              raise SystemExit("timeout_hours must be in [0.25, 72]")
+          PY
+
+          if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
+            require_safe "git_token_ssm_parameter_name" "${GIT_TOKEN_SSM_PARAMETER_NAME}"
+            if [[ ! "${GIT_TOKEN_SSM_PARAMETER_NAME}" =~ ^/scfuzzbench/[A-Za-z0-9_./-]+$ ]]; then
+              fail "git_token_ssm_parameter_name must start with /scfuzzbench/"
+            fi
+          fi
+
+          if [[ -n "${PROPERTIES_PATH}" ]]; then
+            require_safe "properties_path" "${PROPERTIES_PATH}"
+            if [[ "${PROPERTIES_PATH}" == /* || "${PROPERTIES_PATH}" == *".."* ]]; then
+              fail "properties_path must be repo-relative and must not contain '..'"
+            fi
+            if [[ ! "${PROPERTIES_PATH}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+              fail "properties_path must not contain spaces"
+            fi
+          fi
+
+          if [[ -n "${FUZZER_ENV_JSON}" ]]; then
+            python3 - <<'PY'
+          import json
+          import os
+          import re
+          raw = os.environ["FUZZER_ENV_JSON"]
+          try:
+              obj = json.loads(raw)
+          except Exception as e:
+              raise SystemExit(f"Invalid fuzzer_env_json: {e}")
+          if not isinstance(obj, dict):
+              raise SystemExit("fuzzer_env_json must be a JSON object")
+          if len(obj) > 64:
+              raise SystemExit("fuzzer_env_json has too many keys (max 64)")
+          key_re = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+          forbidden = re.compile(r'[\r\n"`$\\\\]')
+          for k, v in obj.items():
+              if not isinstance(k, str) or not key_re.match(k):
+                  raise SystemExit(f"Invalid env key: {k}")
+              if not isinstance(v, str):
+                  raise SystemExit(f"Env value for {k} must be a string")
+              if len(v) > 2000:
+                  raise SystemExit(f"Env value for {k} too long (max 2000 chars)")
+              if forbidden.search(v):
+                  raise SystemExit(f"Env value for {k} contains a forbidden character")
+          PY
+          fi
+
       - name: Terraform apply
         id: apply
         env:
+          TARGET_REPO_URL: ${{ inputs.target_repo_url }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          BENCHMARK_TYPE: ${{ inputs.benchmark_type }}
+          INSTANCE_TYPE: ${{ inputs.instance_type }}
+          INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
+          FOUNDRY_VERSION: ${{ inputs.foundry_version }}
+          FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
+          FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
+          ECHIDNA_VERSION: ${{ inputs.echidna_version }}
+          MEDUSA_VERSION: ${{ inputs.medusa_version }}
+          BITWUZLA_VERSION: ${{ inputs.bitwuzla_version }}
+          GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
           PROPERTIES_PATH: ${{ inputs.properties_path }}
         run: |
@@ -150,36 +422,36 @@ jobs:
           tf_args=(
             -var "aws_region=${AWS_REGION}"
             -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
-            -var "target_repo_url=${{ inputs.target_repo_url }}"
-            -var "target_commit=${{ inputs.target_commit }}"
-            -var "benchmark_type=${{ inputs.benchmark_type }}"
-            -var "instance_type=${{ inputs.instance_type }}"
-            -var "instances_per_fuzzer=${{ inputs.instances_per_fuzzer }}"
-            -var "timeout_hours=${{ inputs.timeout_hours }}"
+            -var "target_repo_url=${TARGET_REPO_URL}"
+            -var "target_commit=${TARGET_COMMIT}"
+            -var "benchmark_type=${BENCHMARK_TYPE}"
+            -var "instance_type=${INSTANCE_TYPE}"
+            -var "instances_per_fuzzer=${INSTANCES_PER_FUZZER}"
+            -var "timeout_hours=${TIMEOUT_HOURS}"
             -var "run_id=${run_id}"
-            -var "scfuzzbench_commit=${{ github.sha }}"
+            -var "scfuzzbench_commit=${GITHUB_SHA}"
           )
 
-          if [[ -n "${{ inputs.foundry_version }}" ]]; then
-            tf_args+=(-var "foundry_version=${{ inputs.foundry_version }}")
+          if [[ -n "${FOUNDRY_VERSION}" ]]; then
+            tf_args+=(-var "foundry_version=${FOUNDRY_VERSION}")
           fi
-          if [[ -n "${{ inputs.foundry_git_repo }}" ]]; then
-            tf_args+=(-var "foundry_git_repo=${{ inputs.foundry_git_repo }}")
+          if [[ -n "${FOUNDRY_GIT_REPO}" ]]; then
+            tf_args+=(-var "foundry_git_repo=${FOUNDRY_GIT_REPO}")
           fi
-          if [[ -n "${{ inputs.foundry_git_ref }}" ]]; then
-            tf_args+=(-var "foundry_git_ref=${{ inputs.foundry_git_ref }}")
+          if [[ -n "${FOUNDRY_GIT_REF}" ]]; then
+            tf_args+=(-var "foundry_git_ref=${FOUNDRY_GIT_REF}")
           fi
-          if [[ -n "${{ inputs.echidna_version }}" ]]; then
-            tf_args+=(-var "echidna_version=${{ inputs.echidna_version }}")
+          if [[ -n "${ECHIDNA_VERSION}" ]]; then
+            tf_args+=(-var "echidna_version=${ECHIDNA_VERSION}")
           fi
-          if [[ -n "${{ inputs.medusa_version }}" ]]; then
-            tf_args+=(-var "medusa_version=${{ inputs.medusa_version }}")
+          if [[ -n "${MEDUSA_VERSION}" ]]; then
+            tf_args+=(-var "medusa_version=${MEDUSA_VERSION}")
           fi
-          if [[ -n "${{ inputs.bitwuzla_version }}" ]]; then
-            tf_args+=(-var "bitwuzla_version=${{ inputs.bitwuzla_version }}")
+          if [[ -n "${BITWUZLA_VERSION}" ]]; then
+            tf_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
           fi
-          if [[ -n "${{ inputs.git_token_ssm_parameter_name }}" ]]; then
-            tf_args+=(-var "git_token_ssm_parameter_name=${{ inputs.git_token_ssm_parameter_name }}")
+          if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
+            tf_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")
           fi
 
           if [[ -n "${FUZZER_ENV_JSON}" || -n "${PROPERTIES_PATH}" ]]; then

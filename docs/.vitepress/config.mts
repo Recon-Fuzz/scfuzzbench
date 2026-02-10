@@ -30,6 +30,7 @@ export default defineConfig({
 
   themeConfig: {
     nav: [
+      { text: "Start benchmark", link: "/start" },
       { text: "Runs", link: "/runs/" },
       { text: "Benchmarks", link: "/benchmarks/" },
       { text: "Ops", link: "/ops" },
@@ -40,6 +41,7 @@ export default defineConfig({
       {
         text: "Explore",
         items: [
+          { text: "Start Benchmark", link: "/start" },
           { text: "Runs", link: "/runs/" },
           { text: "Benchmarks", link: "/benchmarks/" },
           { text: "Ops Notes", link: "/ops" },
@@ -64,4 +66,3 @@ export default defineConfig({
     },
   },
 });
-
