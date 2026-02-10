@@ -282,7 +282,7 @@ jobs:
           # Keep them conservative to avoid shell-quoting surprises.
           has_forbidden_chars() {
             local s="$1"
-            [[ "$s" == *'"'* || "$s" == *'`'* || "$s" == *'$'* || "$s" == *'\\'* ]]
+            [[ "$s" == *\"* || "$s" == *"$"* || "$s" == *$'\x60'* || "$s" == *\\* ]]
           }
 
           require_safe() {
