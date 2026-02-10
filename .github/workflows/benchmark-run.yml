@@ -310,7 +310,7 @@ jobs:
 
           if [[ -n "${FOUNDRY_GIT_REPO}" ]]; then
             require_safe "foundry_git_repo" "${FOUNDRY_GIT_REPO}"
-            if [[ ! "${FOUNDRY_GIT_REPO}" =~ ^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?/?$ ]]; then
+            if [[ ! "${FOUNDRY_GIT_REPO}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?/?$ ]]; then
               fail "foundry_git_repo must be https://github.com/<org>/<repo>"
             fi
           fi
@@ -332,7 +332,7 @@ jobs:
             require_safe "bitwuzla_version" "${BITWUZLA_VERSION}"
           fi
 
-          if [[ ! "${TARGET_REPO_URL}" =~ ^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?/?$ ]]; then
+          if [[ ! "${TARGET_REPO_URL}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?/?$ ]]; then
             fail "target_repo_url must be https://github.com/<org>/<repo>"
           fi
 
@@ -345,7 +345,7 @@ jobs:
             *) fail "benchmark_type must be property or optimization" ;;
           esac
 
-          if [[ ! "${INSTANCE_TYPE}" =~ ^[a-z0-9]+\\.[a-z0-9]+$ ]]; then
+          if [[ ! "${INSTANCE_TYPE}" =~ ^[a-z0-9]+\.[a-z0-9]+$ ]]; then
             fail "instance_type must look like c6a.4xlarge"
           fi
 
@@ -353,7 +353,7 @@ jobs:
             fail "instances_per_fuzzer must be an integer in [1, 20]"
           fi
 
-          if [[ ! "${TIMEOUT_HOURS}" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then
+          if [[ ! "${TIMEOUT_HOURS}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
             fail "timeout_hours must be a number"
           fi
           python3 - <<'PY'
