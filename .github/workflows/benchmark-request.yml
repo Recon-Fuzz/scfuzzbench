@@ -196,7 +196,7 @@ jobs:
                   `Issue author association \`${authorAssociation}\` is not allowed to request benchmarks.`,
                   "",
                   "Allowed: `OWNER`, `MEMBER`, `COLLABORATOR`.",
-                ].join("\\n")
+                ].join("\n")
               );
               await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
               return;
@@ -212,7 +212,7 @@ jobs:
                   parsed.message,
                   "",
                   `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
-                ].join("\\n")
+                ].join("\n")
               );
               return;
             }
@@ -362,7 +362,7 @@ jobs:
                   ...errors.map((e) => `- ${e}`),
                   "",
                   `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
-                ].join("\\n")
+                ].join("\n")
               );
               return;
             }
@@ -389,7 +389,7 @@ jobs:
                   "",
                   `To start: change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
                   action === "edited" ? "" : "",
-                ].join("\\n").trim()
+                ].join("\n").trim()
               );
             }
 
@@ -410,7 +410,7 @@ jobs:
                   `- Instances per fuzzer: \`${inst.value}\``,
                   `- Timeout hours: \`${hours.value}\``,
                   `- Disabled fuzzers: \`${disabledFuzzersJson}\``,
-                ].join("\\n")
+                ].join("\n")
               );
 
               core.setOutput("should_run", "true");
@@ -505,7 +505,7 @@ jobs:
                   `Workflow run: ${runUrl}`,
                   "",
                   "A maintainer can fix the request or re-apply the `benchmark/approved` label to retry.",
-                ].join("\\n")
+                ].join("\n")
               );
               return;
             }
@@ -530,7 +530,7 @@ jobs:
                 `- ${docsUrl}`,
                 "",
                 "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
-              ].join("\\n")
+              ].join("\n")
             );
 
             await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
