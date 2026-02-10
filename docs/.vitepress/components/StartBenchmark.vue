@@ -17,8 +17,40 @@ const instanceType = ref("c6a.4xlarge");
 const instancesPerFuzzer = ref(4);
 const timeoutHours = ref(1);
 
-// Defaults to off: symexec runs are slower/more finicky, so we disable by default.
-const includeEchidnaSymexec = ref(false);
+// Dynamically discover fuzzers from committed run scripts.
+// In CI tarball checkouts, this naturally reflects the tracked repo content.
+const discoveredFuzzerRuns = import.meta.glob("../../../fuzzers/*/run.sh", {
+  query: "?raw",
+  import: "default",
+});
+
+function orderFuzzers(keys: string[]): string[] {
+  const unique = Array.from(new Set(keys));
+  const preferred = ["echidna", "medusa", "foundry", "echidna-symexec"];
+  const orderedPreferred = preferred.filter((name) => unique.includes(name));
+  const extras = unique.filter((name) => !preferred.includes(name)).sort();
+  return [...orderedPreferred, ...extras];
+}
+
+function extractFuzzerName(path: string): string | null {
+  const match = path.match(/\/fuzzers\/([^/]+)\/run\.sh$/);
+  return match ? match[1] : null;
+}
+
+const allFuzzerKeys = orderFuzzers(
+  Object.keys(discoveredFuzzerRuns)
+    .map(extractFuzzerName)
+    .filter((name): name is string => Boolean(name))
+);
+
+// Keep echidna-symexec hidden from the UI; it remains disabled unless explicitly enabled elsewhere.
+const selectableFuzzerKeys = allFuzzerKeys.filter((name) => name !== "echidna-symexec");
+const selectedFuzzerKeys = ref<string[]>([...selectableFuzzerKeys]);
+
+const disabledFuzzerKeys = computed(() => {
+  const selected = new Set(selectedFuzzerKeys.value);
+  return allFuzzerKeys.filter((name) => !selected.has(name));
+});
 
 // Advanced / optional overrides.
 const foundryVersion = ref("");
@@ -35,8 +67,6 @@ const propertiesPath = ref("");
 const fuzzerEnvJson = ref("");
 
 const requestJson = computed(() => {
-  const disabledFuzzers = includeEchidnaSymexec.value ? [] : ["echidna-symexec"];
-
   const payload: Record<string, unknown> = {
     target_repo_url: targetRepoUrl.value.trim(),
     target_commit: targetCommit.value.trim(),
@@ -44,7 +74,7 @@ const requestJson = computed(() => {
     instance_type: instanceType.value.trim(),
     instances_per_fuzzer: instancesPerFuzzer.value,
     timeout_hours: timeoutHours.value,
-    disabled_fuzzers: disabledFuzzers,
+    disabled_fuzzers: disabledFuzzerKeys.value,
 
     foundry_version: foundryVersion.value.trim(),
     foundry_git_repo: foundryGitRepo.value.trim(),
@@ -151,11 +181,23 @@ const showAdvanced = ref(false);
           />
         </label>
 
-        <label class="sb-start__field sb-start__field--full sb-start__toggle">
-          <input v-model="includeEchidnaSymexec" class="sb-start__toggle-input" type="checkbox" />
-          <span class="sb-start__toggle-label">
-            Include <code>echidna-symexec</code> (experimental, slower)
-          </span>
+        <label class="sb-start__field sb-start__field--full">
+          <div class="sb-start__label">Fuzzers</div>
+          <div class="sb-start__fuzzers">
+            <label
+              v-for="fuzzer in selectableFuzzerKeys"
+              :key="fuzzer"
+              class="sb-start__fuzzer-option"
+            >
+              <input
+                v-model="selectedFuzzerKeys"
+                class="sb-start__fuzzer-checkbox"
+                type="checkbox"
+                :value="fuzzer"
+              />
+              <span><code>{{ fuzzer }}</code></span>
+            </label>
+          </div>
         </label>
       </div>
 
