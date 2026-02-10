@@ -292,7 +292,7 @@ jobs:
               fail "${name} must be a single line"
             fi
             if has_forbidden_chars "$value"; then
-              fail "${name} contains a forbidden character (\", \\\\, $, `)"
+              fail "${name} contains a forbidden character (double quote, backslash, dollar sign, or backtick)"
             fi
           }
 

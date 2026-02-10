@@ -136,7 +136,7 @@ jobs:
             }
 
             function parseOuterJsonRequest(body) {
-              const m = body.match(/```json\\s*([\\s\\S]*?)\\s*```/i);
+              const m = body.match(/```json\s*([\s\S]*?)\s*```/i);
               if (!m) return fail("Missing ```json code block with request payload.");
               try {
                 const obj = JSON.parse(m[1]);
@@ -168,7 +168,7 @@ jobs:
                 if (v.length > 2000) return fail(`Env value for ${k} too long (max 2000 chars)`);
                 // Values are rendered into user-data as: export KEY="VALUE"
                 // Keep this conservative to avoid shell injection and quoting pitfalls.
-                if (/[\\r\\n\"`$\\\\]/.test(v)) return fail(`Env value for ${k} contains a forbidden character`);
+                if (/[\r\n"`$\\]/.test(v)) return fail(`Env value for ${k} contains a forbidden character`);
               }
               return ok(JSON.stringify(obj));
             }
@@ -262,7 +262,7 @@ jobs:
             }
             const disabledFuzzersJson = JSON.stringify(disabledFuzzers);
 
-            const githubRepoUrlRe = /^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+(?:\\.git)?\\/?$/;
+            const githubRepoUrlRe = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/;
             if (url.ok) {
               const urlMatch = mustMatch(url.value, "target_repo_url", githubRepoUrlRe, "expected https://github.com/<org>/<repo>");
               if (!urlMatch.ok) errors.push(urlMatch.message);
@@ -279,7 +279,7 @@ jobs:
               errors.push("benchmark_type must be 'property' or 'optimization'");
             }
 
-            const instanceTypeRe = /^[a-z0-9]+\\.[a-z0-9]+$/;
+            const instanceTypeRe = /^[a-z0-9]+\.[a-z0-9]+$/;
             if (itype.ok) {
               const itMatch = mustMatch(itype.value, "instance_type", instanceTypeRe, "expected like c6a.4xlarge");
               if (!itMatch.ok) errors.push(itMatch.message);
@@ -320,7 +320,7 @@ jobs:
               const mssm = mustMatch(
                 git_token_ssm_parameter_name.value,
                 "git_token_ssm_parameter_name",
-                /^\\/[A-Za-z0-9_./-]+$/,
+                /^\/[A-Za-z0-9_./-]+$/,
                 "expected SSM parameter path like /scfuzzbench/... (no spaces)"
               );
               if (!mssm.ok) errors.push(mssm.message);
