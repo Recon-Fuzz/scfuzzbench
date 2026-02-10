@@ -200,13 +200,13 @@ const showAdvanced = ref(false);
 
           <label class="sb-start__field sb-start__field--full">
             <div class="sb-start__label">Extra fuzzer env JSON (optional)</div>
-            <textarea
-              v-model="fuzzerEnvJson"
-              class="sb-start__input sb-start__textarea"
-              rows="6"
-              placeholder="{\"SCFUZZBENCH_PROPERTIES_PATH\":\"...\"}"
-            />
-          </label>
+	            <textarea
+	              v-model="fuzzerEnvJson"
+	              class="sb-start__input sb-start__textarea"
+	              rows="6"
+	              placeholder='{"SCFUZZBENCH_PROPERTIES_PATH":"..."}'
+	            />
+	          </label>
         </div>
 
         <p class="sb-start__hint">
