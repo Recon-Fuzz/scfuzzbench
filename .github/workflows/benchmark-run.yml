@@ -163,9 +163,6 @@ on:
       AWS_REGION:
         required: false
     outputs:
-      bucket_name:
-        description: "S3 bucket used for run artifacts."
-        value: ${{ jobs.benchmark-run.outputs.bucket_name }}
       run_id:
         description: "Run ID (Unix timestamp)."
         value: ${{ jobs.benchmark-run.outputs.run_id }}
@@ -180,7 +177,6 @@ jobs:
   benchmark-run:
     runs-on: ubuntu-latest
     outputs:
-      bucket_name: ${{ steps.tf_outputs.outputs.bucket_name }}
       run_id: ${{ steps.tf_outputs.outputs.run_id }}
       benchmark_uuid: ${{ steps.tf_outputs.outputs.benchmark_uuid }}
     env:
@@ -517,11 +513,9 @@ jobs:
         id: tf_outputs
         run: |
           terraform -chdir=infrastructure output -json > run_metadata.json
-          bucket=$(jq -r '.bucket_name.value' run_metadata.json)
           run_id=$(jq -r '.run_id.value' run_metadata.json)
           benchmark_uuid=$(jq -r '.benchmark_uuid.value' run_metadata.json)
           {
-            echo "bucket_name=${bucket}"
             echo "run_id=${run_id}"
             echo "benchmark_uuid=${benchmark_uuid}"
           } >> "${GITHUB_OUTPUT}"
@@ -537,7 +531,6 @@ jobs:
           {
             echo "Benchmark run started."
             echo ""
-            echo "- Bucket: ${{ steps.tf_outputs.outputs.bucket_name }}"
             echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
             echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
           } >> "${GITHUB_STEP_SUMMARY}"
