@@ -123,6 +123,37 @@ def compact_repo_label(repo_url: str) -> str:
     return s
 
 
+def format_fuzzer_lines(manifest: dict) -> list[str]:
+    ordered_fuzzers: list[str] = []
+    if isinstance(manifest.get("fuzzer_keys"), list):
+        for item in manifest.get("fuzzer_keys", []):
+            name = str(item).strip()
+            if name and name not in ordered_fuzzers:
+                ordered_fuzzers.append(name)
+
+    versions: dict[str, str] = {}
+    for raw_key, raw_value in manifest.items():
+        key = str(raw_key).strip()
+        if not key.endswith("_version"):
+            continue
+        version = str(raw_value).strip()
+        if not version:
+            continue
+        fuzzer_name = key.removesuffix("_version")
+        if fuzzer_name:
+            versions[fuzzer_name] = version
+
+    extra_fuzzers = sorted([name for name in versions if name not in ordered_fuzzers])
+    display_fuzzers = ordered_fuzzers + extra_fuzzers
+
+    lines: list[str] = []
+    for fuzzer in display_fuzzers:
+        version = versions.get(fuzzer, "").strip()
+        line = f"{fuzzer} ({version})" if version else fuzzer
+        lines.append(f"`{line}`")
+    return lines
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -436,18 +467,7 @@ def main() -> int:
             inst_type = str(m.get("instance_type", "")).strip()
             insts = m.get("instances_per_fuzzer", "")
 
-            fuzzers_parts: list[str] = []
-            if isinstance(m.get("fuzzer_keys"), list) and m.get("fuzzer_keys"):
-                keys = ", ".join([str(x) for x in m.get("fuzzer_keys", [])])
-                fuzzers_parts.append(f"`{keys}`")
-            versions: list[str] = []
-            for k in ["foundry_version", "echidna_version", "medusa_version", "bitwuzla_version"]:
-                v = str(m.get(k, "")).strip()
-                if v:
-                    versions.append(f"{k.removesuffix('_version')}@{v}")
-            if versions:
-                fuzzers_parts.append(f"`{', '.join(versions)}`")
-            fuzzers_cell = "<br>".join(fuzzers_parts)
+            fuzzers_cell = "<br>".join(format_fuzzer_lines(m))
 
             sc_commit = str(m.get("scfuzzbench_commit", "")).strip()
             sc_commit_short = shortish(sc_commit, max_len=10) if sc_commit else ""
