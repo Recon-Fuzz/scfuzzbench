@@ -572,7 +572,7 @@ def main() -> int:
         lines.append("")
         lines.append(f"- Date (UTC): `{utc_ts(r.run_id)}`")
         lines.append(f"- Benchmark: [`{r.benchmark_uuid}`](../../../benchmarks/{r.benchmark_uuid}/)")
-        lines.append(f"- Timeout: `{r.timeout_hours:g}h` (+1h grace for completeness)")
+        lines.append(f"- Timeout: `{r.timeout_hours:g}h`")
         lines.append("")
 
         if not r.analyzed:
