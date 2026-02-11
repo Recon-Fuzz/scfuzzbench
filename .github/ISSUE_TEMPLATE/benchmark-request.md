@@ -22,7 +22,7 @@ Notes:
   "instance_type": "c6a.4xlarge",
   "instances_per_fuzzer": 4,
   "timeout_hours": 1,
-  "disabled_fuzzers": ["echidna-symexec"],
+  "fuzzers": ["echidna", "medusa", "foundry"],
   "foundry_version": "",
   "foundry_git_repo": "https://github.com/aviggiano/foundry",
   "foundry_git_ref": "master",

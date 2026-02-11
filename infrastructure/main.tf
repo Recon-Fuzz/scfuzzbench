@@ -54,9 +54,14 @@ locals {
       run_path     = "${path.module}/../fuzzers/echidna-symexec/run.sh"
     },
   ]
+  available_fuzzer_keys = [
+    for fuzzer in concat(local.base_fuzzer_definitions, var.custom_fuzzer_definitions) :
+    fuzzer.key
+  ]
+  selected_fuzzer_keys = length(var.fuzzers) > 0 ? toset(var.fuzzers) : toset(local.available_fuzzer_keys)
   fuzzer_definitions = [
     for fuzzer in concat(local.base_fuzzer_definitions, var.custom_fuzzer_definitions) :
-    fuzzer if !contains(var.disabled_fuzzers, fuzzer.key)
+    fuzzer if contains(local.selected_fuzzer_keys, fuzzer.key)
   ]
 
   instances = flatten([
