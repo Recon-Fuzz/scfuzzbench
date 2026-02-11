@@ -143,12 +143,18 @@ def format_fuzzer_lines(manifest: dict) -> list[str]:
         if fuzzer_name:
             versions[fuzzer_name] = version
 
-    extra_fuzzers = sorted([name for name in versions if name not in ordered_fuzzers])
-    display_fuzzers = ordered_fuzzers + extra_fuzzers
-
     lines: list[str] = []
-    for fuzzer in display_fuzzers:
+    for fuzzer in ordered_fuzzers:
         version = versions.get(fuzzer, "").strip()
+        if not version and fuzzer == "echidna-symexec":
+            echidna_version = versions.get("echidna", "").strip()
+            bitwuzla_version = versions.get("bitwuzla", "").strip()
+            if echidna_version and bitwuzla_version:
+                version = f"{echidna_version}, bitwuzla {bitwuzla_version}"
+            elif echidna_version:
+                version = echidna_version
+            elif bitwuzla_version:
+                version = f"bitwuzla {bitwuzla_version}"
         line = f"{fuzzer} ({version})" if version else fuzzer
         lines.append(f"`{line}`")
     return lines
