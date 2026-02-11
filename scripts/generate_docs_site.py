@@ -327,15 +327,14 @@ def main() -> int:
         runs_lines.append("_No complete runs found in the S3 run index._")
         runs_lines.append("")
     else:
-        runs_lines.append("| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout | Status |")
-        runs_lines.append("|---|---|---|---|---|---:|---|")
+        runs_lines.append("| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout |")
+        runs_lines.append("|---|---|---|---|---|---:|")
         for r in complete_runs:
             m = r.manifest
             repo = str(m.get("target_repo_url", "")).strip()
             commit = str(m.get("target_commit", "")).strip()
             commit_short = commit[:10] if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
-            status = analysis_status(r)
             runs_lines.append(
                 "| "
                 + " | ".join(
@@ -346,7 +345,6 @@ def main() -> int:
                         target_cell,
                         f"`{commit_short}`" if commit_short else "",
                         f"{r.timeout_hours:g}h",
-                        status,
                     ]
                 )
                 + " |"
@@ -372,15 +370,14 @@ def main() -> int:
         lines.append(f"- Date (UTC): `{utc_ts(run_id)}`")
         lines.append(f"- Benchmarks: `{len(runs)}`")
         lines.append("")
-        lines.append("| Benchmark | Details | Target | Commit | Timeout | Status |")
-        lines.append("|---|---|---|---|---:|---|")
+        lines.append("| Benchmark | Details | Target | Commit | Timeout |")
+        lines.append("|---|---|---|---|---:|")
         for rr in runs:
             m = rr.manifest
             repo = str(m.get("target_repo_url", "")).strip()
             commit = str(m.get("target_commit", "")).strip()
             commit_short = shortish(commit, max_len=10) if commit else ""
             target_cell = f"[`{repo}`]({repo})" if repo.startswith("http") else f"`{repo}`"
-            status = analysis_status(rr)
             lines.append(
                 "| "
                 + " | ".join(
@@ -390,7 +387,6 @@ def main() -> int:
                         target_cell,
                         f"`{commit_short}`" if commit_short else "",
                         f"{rr.timeout_hours:g}h",
-                        status,
                     ]
                 )
                 + " |"
