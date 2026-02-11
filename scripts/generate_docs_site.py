@@ -321,8 +321,6 @@ def main() -> int:
     runs_lines.append("")
     runs_lines.append(f"_Generated at: **{generated_at}** (UTC)_")
     runs_lines.append("")
-    runs_lines.append("Only **complete** runs are shown (timeout + 1h grace).")
-    runs_lines.append("")
     if not complete_runs:
         runs_lines.append("_No complete runs found in the S3 run index._")
         runs_lines.append("")
