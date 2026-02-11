@@ -24,7 +24,7 @@ jobs:
       instance_type: ${{ steps.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ steps.prepare.outputs.instances_per_fuzzer }}
       timeout_hours: ${{ steps.prepare.outputs.timeout_hours }}
-      disabled_fuzzers_json: ${{ steps.prepare.outputs.disabled_fuzzers_json }}
+      fuzzers_json: ${{ steps.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ steps.prepare.outputs.foundry_version }}
       foundry_git_repo: ${{ steps.prepare.outputs.foundry_git_repo }}
       foundry_git_ref: ${{ steps.prepare.outputs.foundry_git_ref }}
@@ -49,6 +49,7 @@ jobs:
             const REQ_MARKER = "scfuzzbench-benchmark-request:v1";
             const LABEL_NEEDS = "benchmark/needs-approval";
             const LABEL_APPROVED = "benchmark/approved";
+            const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry"];
 
             function uniq(arr) {
               return Array.from(new Set(arr));
@@ -238,29 +239,35 @@ jobs:
             const hours = mustNumber(payload, "timeout_hours", { required: true, min: 0.25, max: 72, integer: false });
             if (!hours.ok) errors.push(hours.message);
 
-            let disabledFuzzers = payload["disabled_fuzzers"];
-            if (disabledFuzzers === undefined || disabledFuzzers === null) {
-              disabledFuzzers = ["echidna-symexec"];
+            let fuzzers = payload["fuzzers"];
+            if (fuzzers === undefined || fuzzers === null) {
+              fuzzers = DEFAULT_FUZZERS;
             }
-            if (!Array.isArray(disabledFuzzers)) {
-              errors.push("disabled_fuzzers must be an array of fuzzer keys");
-              disabledFuzzers = [];
+            if (!Array.isArray(fuzzers)) {
+              errors.push("fuzzers must be an array of fuzzer keys");
+              fuzzers = [];
             } else {
-              if (disabledFuzzers.length > 20) {
-                errors.push("disabled_fuzzers has too many entries (max 20)");
+              if (fuzzers.length === 0) {
+                errors.push("fuzzers must include at least one fuzzer key");
+              }
+              if (fuzzers.length > 20) {
+                errors.push("fuzzers has too many entries (max 20)");
               }
               const keyRe = /^[a-z0-9][a-z0-9-]{0,63}$/;
               const sanitized = [];
-              for (const v of disabledFuzzers) {
+              for (const v of fuzzers) {
                 if (typeof v !== "string" || !keyRe.test(v)) {
-                  errors.push(`Invalid disabled fuzzer key: ${JSON.stringify(v)}`);
+                  errors.push(`Invalid fuzzer key: ${JSON.stringify(v)}`);
                   continue;
                 }
                 sanitized.push(v);
               }
-              disabledFuzzers = uniq(sanitized);
+              fuzzers = uniq(sanitized);
+              if (fuzzers.length === 0) {
+                errors.push("fuzzers must include at least one valid fuzzer key");
+              }
             }
-            const disabledFuzzersJson = JSON.stringify(disabledFuzzers);
+            const fuzzersJson = JSON.stringify(fuzzers);
 
             const githubRepoUrlRe = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/;
             if (url.ok) {
@@ -385,7 +392,7 @@ jobs:
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
                   `- Timeout hours: \`${hours.value}\``,
-                  `- Disabled fuzzers: \`${disabledFuzzersJson}\``,
+                  `- Fuzzers: \`${fuzzersJson}\``,
                   "",
                   `To start: change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
                   action === "edited" ? "" : "",
@@ -409,7 +416,7 @@ jobs:
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
                   `- Timeout hours: \`${hours.value}\``,
-                  `- Disabled fuzzers: \`${disabledFuzzersJson}\``,
+                  `- Fuzzers: \`${fuzzersJson}\``,
                 ].join("\n")
               );
 
@@ -421,7 +428,7 @@ jobs:
               core.setOutput("instance_type", itype.value);
               core.setOutput("instances_per_fuzzer", String(inst.value));
               core.setOutput("timeout_hours", String(hours.value));
-              core.setOutput("disabled_fuzzers_json", disabledFuzzersJson);
+              core.setOutput("fuzzers_json", fuzzersJson);
 
               core.setOutput("foundry_version", foundry_version.ok ? foundry_version.value : "");
               core.setOutput("foundry_git_repo", foundry_git_repo.ok ? foundry_git_repo.value : "");
@@ -446,7 +453,7 @@ jobs:
       instance_type: ${{ needs.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ fromJSON(needs.prepare.outputs.instances_per_fuzzer) }}
       timeout_hours: ${{ fromJSON(needs.prepare.outputs.timeout_hours) }}
-      disabled_fuzzers_json: ${{ needs.prepare.outputs.disabled_fuzzers_json }}
+      fuzzers_json: ${{ needs.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ needs.prepare.outputs.foundry_version }}
       foundry_git_repo: ${{ needs.prepare.outputs.foundry_git_repo }}
       foundry_git_ref: ${{ needs.prepare.outputs.foundry_git_ref }}

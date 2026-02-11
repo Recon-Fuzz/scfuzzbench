@@ -65,6 +65,7 @@ Set these inputs via `-var`/`tfvars` when you run Terraform
 - `target_repo_url` and `target_commit`
 - `benchmark_type` (`property` or `optimization`)
 - `instance_type`, `instances_per_fuzzer`, `timeout_hours`
+- `fuzzers` (allowlist of fuzzer keys to run; empty runs all available fuzzers)
 - fuzzer versions (and `foundry_git_repo`/`foundry_git_ref` if building from
   source)
 - `git_token_ssm_parameter_name` if the target repo is private
@@ -93,7 +94,7 @@ export TF_VAR_target_repo_url="https://github.com/org/repo"
 export TF_VAR_target_commit="..."
 export TF_VAR_timeout_hours=1
 export TF_VAR_instances_per_fuzzer=4
-export TF_VAR_disabled_fuzzers='["echidna-symexec"]'
+export TF_VAR_fuzzers='["echidna","medusa","foundry"]'
 export TF_VAR_git_token_ssm_parameter_name="/scfuzzbench/recon/github_token"
 export TF_VAR_foundry_git_repo="https://github.com/your-org/foundry"
 export TF_VAR_foundry_git_ref="master"

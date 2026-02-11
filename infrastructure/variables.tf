@@ -173,10 +173,18 @@ variable "custom_fuzzer_definitions" {
   default     = []
 }
 
-variable "disabled_fuzzers" {
+variable "fuzzers" {
   type        = list(string)
-  description = "Fuzzer keys to exclude from the run."
+  description = "Fuzzer keys to include in the run. Empty means all available fuzzers."
   default     = []
+
+  validation {
+    condition = length(var.fuzzers) == length(distinct(var.fuzzers)) && alltrue([
+      for fuzzer in var.fuzzers :
+      can(regex("^[a-z0-9][a-z0-9-]{0,63}$", fuzzer))
+    ])
+    error_message = "fuzzers must contain unique fuzzer keys matching ^[a-z0-9][a-z0-9-]{0,63}$."
+  }
 }
 
 variable "fuzzer_env" {

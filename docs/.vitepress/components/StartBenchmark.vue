@@ -47,10 +47,9 @@ const selectableFuzzerKeys = allFuzzerKeys;
 const selectedFuzzerKeys = ref<string[]>(
   allFuzzerKeys.filter((name) => name !== "echidna-symexec")
 );
-
-const disabledFuzzerKeys = computed(() => {
+const participatingFuzzerKeys = computed(() => {
   const selected = new Set(selectedFuzzerKeys.value);
-  return allFuzzerKeys.filter((name) => !selected.has(name));
+  return allFuzzerKeys.filter((name) => selected.has(name));
 });
 
 // Advanced / optional overrides.
@@ -75,7 +74,7 @@ const requestJson = computed(() => {
     instance_type: instanceType.value.trim(),
     instances_per_fuzzer: instancesPerFuzzer.value,
     timeout_hours: timeoutHours.value,
-    disabled_fuzzers: disabledFuzzerKeys.value,
+    fuzzers: participatingFuzzerKeys.value,
 
     foundry_version: foundryVersion.value.trim(),
     foundry_git_repo: foundryGitRepo.value.trim(),
