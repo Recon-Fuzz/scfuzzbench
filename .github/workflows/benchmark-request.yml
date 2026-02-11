@@ -47,8 +47,11 @@ jobs:
 
             const BOT_MARKER = "<!-- scfuzzbench-benchmark-request-bot -->";
             const REQ_MARKER = "scfuzzbench-benchmark-request:v1";
-            const LABEL_NEEDS = "benchmark/needs-approval";
-            const LABEL_APPROVED = "benchmark/approved";
+            const LABEL_PENDING = "benchmark/01-pending";
+            const LABEL_VALIDATED = "benchmark/02-validated";
+            const LABEL_APPROVED = "benchmark/03-approved";
+            const LABEL_RUNNING = "benchmark/04-running";
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
             const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry"];
 
             function uniq(arr) {
@@ -59,8 +62,9 @@ jobs:
               try {
                 await github.rest.issues.createLabel({ owner, repo, name, color, description });
               } catch (e) {
-                // 422: already exists. Anything else is worth surfacing.
+                // 422: already exists, so ensure color/description stay in sync.
                 if (e.status !== 422) throw e;
+                await github.rest.issues.updateLabel({ owner, repo, name, color, description });
               }
             }
 
@@ -93,6 +97,13 @@ jobs:
               if (want.sort().join(",") === current.sort().join(",")) return;
 
               await github.rest.issues.setLabels({ owner, repo, issue_number, labels: want });
+            }
+
+            async function setStatusLabel(statusLabel) {
+              await setLabels({
+                add: [statusLabel],
+                remove: STATUS_LABELS.filter((l) => l !== statusLabel),
+              });
             }
 
             function fail(message) {
@@ -184,8 +195,10 @@ jobs:
             }
 
             // Ensure labels exist so the UI link + automation can apply them reliably.
-            await ensureLabel(LABEL_NEEDS, "d4c5f9", "Benchmark request awaiting approval.");
-            await ensureLabel(LABEL_APPROVED, "0e8a16", "Benchmark request approved.");
+            await ensureLabel(LABEL_PENDING, "dff6dd", "Benchmark request created and pending JSON validation.");
+            await ensureLabel(LABEL_VALIDATED, "b7eab2", "Benchmark request JSON validated by bot.");
+            await ensureLabel(LABEL_APPROVED, "5ccf58", "Benchmark request approved by maintainer.");
+            await ensureLabel(LABEL_RUNNING, "1f7a1f", "Benchmark request accepted; benchmark run started.");
 
             const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const authorAssociation = String(issue.author_association || "");
@@ -205,14 +218,14 @@ jobs:
 
             const parsed = parseOuterJsonRequest(bodyText);
             if (!parsed.ok) {
-              await setLabels({ add: [LABEL_NEEDS], remove: [LABEL_APPROVED] });
+              await setStatusLabel(LABEL_PENDING);
               await upsertBotComment(
                 [
                   "## Benchmark request needs changes",
                   "",
                   parsed.message,
                   "",
-                  `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                  `Fix the issue body and save the issue. The bot keeps \`${LABEL_PENDING}\` until validation passes.`,
                 ].join("\n")
               );
               return;
@@ -359,7 +372,7 @@ jobs:
             const issueState = String(issue.state || "open");
 
             if (errors.length > 0) {
-              await setLabels({ add: [LABEL_NEEDS], remove: [LABEL_APPROVED] });
+              await setStatusLabel(LABEL_PENDING);
               await upsertBotComment(
                 [
                   "## Benchmark request needs changes",
@@ -368,7 +381,7 @@ jobs:
                   "",
                   ...errors.map((e) => `- ${e}`),
                   "",
-                  `Fix the issue body, then ask a maintainer to change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                  `Fix the issue body and save the issue. The bot keeps \`${LABEL_PENDING}\` until validation passes.`,
                 ].join("\n")
               );
               return;
@@ -376,8 +389,7 @@ jobs:
 
             // All requests require approval. Any edit resets approval.
             if (action === "opened" || action === "edited") {
-              const removeApproved = action === "edited" ? [LABEL_APPROVED] : [];
-              await setLabels({ add: [LABEL_NEEDS], remove: removeApproved });
+              await setStatusLabel(LABEL_VALIDATED);
 
               await upsertBotComment(
                 [
@@ -394,7 +406,7 @@ jobs:
                   `- Timeout hours: \`${hours.value}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
                   "",
-                  `To start: change the label from \`${LABEL_NEEDS}\` to \`${LABEL_APPROVED}\`.`,
+                  `To start: a maintainer must apply \`${LABEL_APPROVED}\`.`,
                   action === "edited" ? "" : "",
                 ].join("\n").trim()
               );
@@ -402,7 +414,7 @@ jobs:
 
             // Only run when the *approved* label is added, and the issue is still open.
             if (action === "labeled" && labelName === LABEL_APPROVED && issueState === "open") {
-              await setLabels({ add: [LABEL_APPROVED], remove: [LABEL_NEEDS] });
+              await setStatusLabel(LABEL_APPROVED);
               await upsertBotComment(
                 [
                   "## Benchmark request approved",
@@ -481,6 +493,11 @@ jobs:
             const issue_number = issue.number;
 
             const BOT_MARKER = "<!-- scfuzzbench-benchmark-request-bot -->";
+            const LABEL_PENDING = "benchmark/01-pending";
+            const LABEL_VALIDATED = "benchmark/02-validated";
+            const LABEL_APPROVED = "benchmark/03-approved";
+            const LABEL_RUNNING = "benchmark/04-running";
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
             async function listIssueComments() {
@@ -503,15 +520,27 @@ jobs:
               }
             }
 
+            async function setStatusLabel(statusLabel) {
+              const { data: latestIssue } = await github.rest.issues.get({ owner, repo, issue_number });
+              const current = (latestIssue.labels || [])
+                .map((l) => (typeof l === "string" ? l : l.name))
+                .filter(Boolean);
+              const want = Array.from(
+                new Set(current.filter((l) => !STATUS_LABELS.includes(l)).concat([statusLabel]))
+              );
+              await github.rest.issues.setLabels({ owner, repo, issue_number, labels: want });
+            }
+
             const result = "${{ needs['benchmark-run'].result }}";
             if (result !== "success") {
+              await setStatusLabel(LABEL_VALIDATED);
               await upsertBotComment(
                 [
                   "## Benchmark dispatch failed",
                   "",
                   `Workflow run: ${runUrl}`,
                   "",
-                  "A maintainer can fix the request or re-apply the `benchmark/approved` label to retry.",
+                  `A maintainer can fix the request and re-apply \`${LABEL_APPROVED}\` to retry.`,
                 ].join("\n")
               );
               return;
@@ -538,4 +567,5 @@ jobs:
               ].join("\n")
             );
 
+            await setStatusLabel(LABEL_RUNNING);
             await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
