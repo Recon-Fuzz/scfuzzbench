@@ -12,8 +12,8 @@ hero:
       text: Start benchmark
       link: /start
     - theme: alt
-      text: Ops notes
-      link: /ops
+      text: Methodology
+      link: /methodology
 features:
   - title: Timestamp-first runs
     details: Run IDs are Unix timestamps, so “latest” is always obvious just by listing prefixes.
