@@ -579,7 +579,7 @@ def main() -> int:
             lines.append("::: warning Missing analysis")
             lines.append("This run is **complete** by time rule but is missing published analysis artifacts.")
             lines.append("It likely needs a manual **Benchmark Release** re-run or manual analysis + upload.")
-            lines.append("See [Ops notes](/ops).")
+            lines.append("See [Methodology](/methodology).")
             lines.append(":::")
             lines.append("")
         elif r.analysis_kind == "reports":
