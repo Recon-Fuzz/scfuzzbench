@@ -170,13 +170,13 @@ set_run_status() {
 
 release_global_lock() {
   local values
-  values=$(jq -cn --arg owner "${RUN_PK}" '{":owner":{S:$owner}}')
+  values=$(jq -cn --arg owner "${SCFUZZBENCH_RUN_ID}" '{":owner":{S:$owner}}')
   local key
   key=$(jq -cn --arg name "${SCFUZZBENCH_LOCK_NAME}" '{lock_name:{S:$name}}')
   aws_cli dynamodb delete-item \
     --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
     --key "${key}" \
-    --condition-expression "owner_run_pk = :owner" \
+    --condition-expression "owner_run_id = :owner" \
     --expression-attribute-values "${values}" \
     >/dev/null || true
 }
