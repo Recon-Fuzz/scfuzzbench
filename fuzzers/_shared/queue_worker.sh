@@ -159,10 +159,11 @@ retry_shard_transition() {
   local attempt=1
   local rc=0
   while true; do
-    if "${fn_name}" "$@"; then
+    rc=0
+    "${fn_name}" "$@" || rc=$?
+    if (( rc == 0 )); then
       return 0
     fi
-    rc=$?
     if (( rc == 1 )); then
       return 1
     fi
