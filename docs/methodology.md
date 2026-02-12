@@ -42,30 +42,29 @@ Terraform computes two IDs used across the pipeline:
 
 This means changing any of those manifest fields changes `benchmark_uuid`.
 
-### 3) Provision equivalent runners
+### 3) Provision queue + worker pool
 
-Terraform provisions one EC2 instance per `(fuzzer, run_index)` pair:
+Terraform provisions queue-backed execution resources:
 
-- Same AMI family for all (`ubuntu_ami_ssm_parameter`).
-- Same instance type and timeout budget for all fuzzers in a run.
+- SQS shard queue + DLQ per run.
+- A fixed-size EC2 worker pool (`max_parallel`) instead of one instance per shard.
+- A run-state DynamoDB table for shard lifecycle/state accounting.
+- Same AMI family, instance type, and timeout budget for all workers in a run.
 - AZ auto-selected from offering data for the requested instance type (unless `availability_zone` is explicitly set).
 - `user_data_replace_on_change = true` so runner behavior changes trigger replacement.
 
-### 4) Execute benchmark on each runner
+### 4) Execute benchmark shards from queue
 
 Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/_shared/common.sh`:
 
-- Install only that runner's fuzzer implementation (`fuzzers/<name>/install.sh`).
-- Clone target repository and checkout the pinned commit.
-- Build with `forge build`.
+- Queue init seeds one message per `(fuzzer, run_index)` shard.
+- Worker polls queue, receives one shard, installs that shard's fuzzer if needed, and runs it.
+- Clone target repository and checkout pinned commit, then build with `forge build`.
 - Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).
-- Collect host metrics periodically into `runner_metrics.csv` (enabled by default).
-- Upload artifacts to S3, then self-shutdown.
-
-Instances are intentionally one-shot:
-
-- A bootstrap sentinel (`/opt/scfuzzbench/.bootstrapped`) avoids accidental reruns after reboot.
-- Shutdown occurs even on failures via trap/finalizer handling.
+- Collect runner metrics into `runner_metrics.csv`.
+- Upload shard artifacts to S3.
+- On failure, worker retries shard with exponential backoff up to `shard_max_attempts`; terminal failures go to DLQ/state.
+- Worker exits only when queue is drained and run state is terminal.
 
 ### 5) Benchmark type switching
 
@@ -87,15 +86,16 @@ Each instance uploads:
 
 ## What Counts as a Complete Run
 
-Docs and release automation use the same completion rule:
+Docs and release automation use queue-aware completion:
 
-- `now >= run_id + (timeout_hours * 3600) + 3600`
+- Queue-mode runs: `runs/<run_id>/<benchmark_uuid>/status.json` must be terminal (`completed` or `failed`).
+- Legacy runs (without queue metadata): `now >= run_id + (timeout_hours * 3600) + 3600`.
 
 Notes:
 
 - `run_id` is interpreted as a Unix timestamp.
 - `timeout_hours` comes from `manifest.json` (default `24` if missing).
-- `3600` is a fixed 1-hour grace window.
+- Queue-mode completion is status-driven; legacy completion remains time-driven.
 
 This rule is implemented in:
 

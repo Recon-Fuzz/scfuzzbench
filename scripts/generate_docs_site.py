@@ -78,6 +78,16 @@ def safe_float(value: object, default: float) -> float:
         return default
 
 
+def as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def rewrite_headings(md: str, *, add: int) -> str:
     out: list[str] = []
     for line in md.splitlines():
@@ -246,9 +256,21 @@ def main() -> int:
             continue
 
         timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
-        deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
-        if now < deadline:
-            continue
+        queue_mode = as_bool(manifest.get("queue_mode", False))
+        if queue_mode:
+            status_key = f"runs/{run_id}/{benchmark_uuid}/status.json"
+            try:
+                status_raw = aws_text(["s3", "cp", f"s3://{bucket}/{status_key}", "-"], profile=profile)
+                status_obj = json.loads(status_raw)
+                status_value = str(status_obj.get("status", "")).strip().lower()
+            except Exception:
+                continue
+            if status_value not in {"completed", "failed"}:
+                continue
+        else:
+            deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
+            if now < deadline:
+                continue
 
         analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
         legacy_prefix = f"reports/{benchmark_uuid}/{run_id}"
@@ -279,7 +301,7 @@ def main() -> int:
         )
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
-    print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
+    print(f"Found {len(complete_runs)} complete runs")
 
     # Clean previously generated run/benchmark subpages.
     rm_tree_children(

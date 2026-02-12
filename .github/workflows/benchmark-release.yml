@@ -141,6 +141,28 @@ jobs:
                       timeout_hours = float(manifest.get("timeout_hours", 24))
                   except Exception:
                       timeout_hours = 24.0
+                  raw_queue_mode = manifest.get("queue_mode", False)
+                  if isinstance(raw_queue_mode, str):
+                      queue_mode = raw_queue_mode.strip().lower() in {"1", "true", "yes", "on"}
+                  else:
+                      queue_mode = bool(raw_queue_mode)
+                  if queue_mode:
+                      status_key = f"runs/{run_id}/{benchmark_uuid}/status.json"
+                      try:
+                          status_raw = aws("s3", "cp", f"s3://{bucket}/{status_key}", "-")
+                          status = json.loads(status_raw)
+                      except Exception:
+                          continue
+                      status_value = str(status.get("status", "")).strip().lower()
+                      if status_value in {"completed", "failed"}:
+                          runs.append(
+                              {
+                                  "benchmark_uuid": benchmark_uuid,
+                                  "run_id": run_id,
+                                  "timeout_hours": timeout_hours,
+                              }
+                          )
+                      continue
                   try:
                       run_start = int(run_id)
                   except ValueError:
