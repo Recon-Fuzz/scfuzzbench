@@ -231,7 +231,9 @@ Two workflows publish runs and releases directly from CI/CD:
   - Enforces a **global mutex** (`benchmark-global-lock`): only one benchmark run is active at a time.
   - New run requests wait with backoff until the active lock holder completes or the lock expires.
   - Queue workers renew the lock lease while shards are still being processed.
-  - Lock waiting is bounded by workflow runtime (`SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS` + GitHub Actions job limits); timed-out requests should be re-dispatched.
+  - Lock orchestration is centralized in `scripts/benchmark_lock.py` (table ensure/acquire/release-guard/release).
+  - `SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS=0` (default) means lock waiting does not time out by policy. Set it to `>0` for explicit fail-fast behavior.
+  - Lock waiting is still bounded by GitHub Actions job runtime limits.
   - Auto-discovers an effective parallel worker cap from EC2 quota signals when available.
   - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
     `TF_BACKEND_CONFIG` (for remote state).
