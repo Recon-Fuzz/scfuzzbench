@@ -13,6 +13,8 @@ import sys
 import time
 from dataclasses import dataclass
 
+from run_completion import is_queue_mode_run, is_run_complete, timeout_hours_from_manifest
+
 
 RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
 
@@ -76,16 +78,6 @@ def safe_float(value: object, default: float) -> float:
         return float(value)  # type: ignore[arg-type]
     except Exception:
         return default
-
-
-def as_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
 
 
 def rewrite_headings(md: str, *, add: int) -> str:
@@ -255,22 +247,25 @@ def main() -> int:
             # Skip malformed or missing manifests.
             continue
 
-        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
-        queue_mode = as_bool(manifest.get("queue_mode", False))
-        if queue_mode:
+        timeout_hours = safe_float(timeout_hours_from_manifest(manifest), 24.0)
+        queue_status = ""
+        if is_queue_mode_run(manifest):
             status_key = f"runs/{run_id}/{benchmark_uuid}/status.json"
             try:
                 status_raw = aws_text(["s3", "cp", f"s3://{bucket}/{status_key}", "-"], profile=profile)
                 status_obj = json.loads(status_raw)
-                status_value = str(status_obj.get("status", "")).strip().lower()
+                queue_status = str(status_obj.get("status", "")).strip().lower()
             except Exception:
                 continue
-            if status_value not in {"completed", "failed"}:
-                continue
-        else:
-            deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
-            if now < deadline:
-                continue
+
+        if not is_run_complete(
+            manifest,
+            run_id=str(run_id),
+            now_epoch=now,
+            grace_seconds=int(args.grace_seconds),
+            queue_status=queue_status,
+        ):
+            continue
 
         analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
         legacy_prefix = f"reports/{benchmark_uuid}/{run_id}"

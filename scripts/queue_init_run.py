@@ -72,6 +72,21 @@ def get_attr_s(item: dict | None, name: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def get_attr_n(item: dict | None, name: str, default: int = 0) -> int:
+    if not isinstance(item, dict):
+        return default
+    attr = item.get(name)
+    if not isinstance(attr, dict):
+        return default
+    raw = attr.get("N")
+    if not isinstance(raw, str):
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def mark_shard_queued(table_name: str, run_pk: str, shard_key: str, message_id: str) -> bool:
     sk = f"SHARD#{shard_key}"
     now = now_iso()
@@ -109,6 +124,42 @@ def mark_shard_queued(table_name: str, run_pk: str, shard_key: str, message_id: 
     if "ConditionalCheckFailedException" in proc.stderr:
         return False
     raise RuntimeError(proc.stderr.strip())
+
+
+def query_run_shards(table_name: str, run_pk: str) -> list[dict]:
+    items: list[dict] = []
+    start_key: dict | None = None
+    while True:
+        args = [
+            "dynamodb",
+            "query",
+            "--table-name",
+            table_name,
+            "--key-condition-expression",
+            "pk = :pk AND begins_with(sk, :prefix)",
+            "--expression-attribute-values",
+            json.dumps(
+                {
+                    ":pk": {"S": run_pk},
+                    ":prefix": {"S": "SHARD#"},
+                },
+                separators=(",", ":"),
+            ),
+            "--consistent-read",
+            "--output",
+            "json",
+        ]
+        if start_key is not None:
+            args.extend(["--exclusive-start-key", json.dumps(start_key, separators=(",", ":"))])
+        proc = aws(args)
+        payload = json.loads(proc.stdout or "{}")
+        page = payload.get("Items", [])
+        if isinstance(page, list):
+            items.extend(page)
+        start_key = payload.get("LastEvaluatedKey")
+        if not isinstance(start_key, dict):
+            break
+    return items
 
 
 def send_shard_message(queue_url: str, body: dict) -> str:
@@ -216,6 +267,62 @@ def mark_shard_failed_on_bootstrap(
     raise RuntimeError(proc.stderr.strip())
 
 
+def set_run_failed_on_bootstrap(table_name: str, run_pk: str, reason: str) -> bool:
+    now = now_iso()
+    names = {"#status": "status"}
+    values = {
+        ":running": {"S": "running"},
+        ":failed": {"S": "failed"},
+        ":now": {"S": now},
+        ":reason": {"S": reason},
+    }
+    proc = aws(
+        [
+            "dynamodb",
+            "update-item",
+            "--table-name",
+            table_name,
+            "--key",
+            json.dumps({"pk": {"S": run_pk}, "sk": {"S": "META"}}, separators=(",", ":")),
+            "--condition-expression",
+            "#status = :running OR #status = :failed",
+            "--update-expression",
+            "SET #status = :failed, completed_at = :now, updated_at = :now, last_error = :reason",
+            "--expression-attribute-names",
+            json.dumps(names, separators=(",", ":")),
+            "--expression-attribute-values",
+            json.dumps(values, separators=(",", ":")),
+        ],
+        check=False,
+    )
+    if proc.returncode == 0:
+        return True
+    if "ConditionalCheckFailedException" in proc.stderr:
+        return False
+    raise RuntimeError(proc.stderr.strip())
+
+
+def recover_bootstrap_failure(table_name: str, run_pk: str, error_message: str) -> tuple[int, bool]:
+    recovered_failed = 0
+    for item in query_run_shards(table_name, run_pk):
+        status = get_attr_s(item, "status")
+        if status in TERMINAL_SHARD_STATUSES:
+            continue
+        shard_key = get_attr_s(item, "shard_key")
+        if not shard_key:
+            shard_sk = get_attr_s(item, "sk")
+            if shard_sk.startswith("SHARD#"):
+                shard_key = shard_sk[len("SHARD#") :]
+        if not shard_key:
+            continue
+        reason = f"bootstrap_fatal: {error_message}"
+        if mark_shard_failed_on_bootstrap(table_name, run_pk, shard_key, reason):
+            recovered_failed += 1
+
+    run_set_failed = set_run_failed_on_bootstrap(table_name, run_pk, f"bootstrap_fatal: {error_message}")
+    return recovered_failed, run_set_failed
+
+
 def write_summary(summary_path: Path | None, summary: dict) -> None:
     if summary_path is None:
         return
@@ -237,6 +344,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    run_pk = ""
     summary = {
         "run_id": args.run_id,
         "benchmark_uuid": args.benchmark_uuid,
@@ -250,6 +358,9 @@ def main() -> int:
         "enqueue_errors": 0,
         "any_enqueue_attempted": False,
         "any_enqueue_succeeded": False,
+        "recovery_marked_failed": 0,
+        "recovery_set_run_failed": False,
+        "recovery_error": "",
         "completed": False,
         "error": "",
     }
@@ -381,6 +492,20 @@ def main() -> int:
         return 0
     except Exception as exc:
         summary["error"] = str(exc)
+        if run_pk:
+            recovery_errors: list[str] = []
+            try:
+                recovered_failed, run_set_failed = recover_bootstrap_failure(
+                    args.run_state_table,
+                    run_pk,
+                    str(exc),
+                )
+                summary["recovery_marked_failed"] = recovered_failed
+                summary["recovery_set_run_failed"] = run_set_failed
+            except Exception as recovery_exc:
+                recovery_errors.append(str(recovery_exc))
+            if recovery_errors:
+                summary["recovery_error"] = "; ".join(recovery_errors)
         write_summary(args.summary_path, summary)
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

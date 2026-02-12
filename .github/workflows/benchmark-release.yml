@@ -57,6 +57,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
+
       - name: Discover runs
         id: discover
         env:
@@ -93,8 +108,13 @@ jobs:
           matrix=$(python3 - <<'PY'
           import json
           import os
+          from pathlib import Path
           import subprocess
+          import sys
           import time
+
+          sys.path.insert(0, str((Path.cwd() / "scripts").resolve()))
+          from run_completion import is_queue_mode_run, is_run_complete, timeout_hours_from_manifest
 
           bucket = os.environ["SCFUZZBENCH_BUCKET"]
           grace = int(os.environ.get("GRACE_SECONDS", "3600"))
@@ -137,37 +157,24 @@ jobs:
                       manifest = json.loads(manifest_raw)
                   except Exception:
                       continue
-                  try:
-                      timeout_hours = float(manifest.get("timeout_hours", 24))
-                  except Exception:
-                      timeout_hours = 24.0
-                  raw_queue_mode = manifest.get("queue_mode", False)
-                  if isinstance(raw_queue_mode, str):
-                      queue_mode = raw_queue_mode.strip().lower() in {"1", "true", "yes", "on"}
-                  else:
-                      queue_mode = bool(raw_queue_mode)
-                  if queue_mode:
+                  timeout_hours = timeout_hours_from_manifest(manifest, default=24.0)
+                  queue_status = ""
+                  if is_queue_mode_run(manifest):
                       status_key = f"runs/{run_id}/{benchmark_uuid}/status.json"
                       try:
                           status_raw = aws("s3", "cp", f"s3://{bucket}/{status_key}", "-")
                           status = json.loads(status_raw)
+                          queue_status = status.get("status", "")
                       except Exception:
                           continue
-                      status_value = str(status.get("status", "")).strip().lower()
-                      if status_value in {"completed", "failed"}:
-                          runs.append(
-                              {
-                                  "benchmark_uuid": benchmark_uuid,
-                                  "run_id": run_id,
-                                  "timeout_hours": timeout_hours,
-                              }
-                          )
-                      continue
-                  try:
-                      run_start = int(run_id)
-                  except ValueError:
-                      continue
-                  if now >= run_start + int(timeout_hours * 3600) + grace:
+
+                  if is_run_complete(
+                      manifest,
+                      run_id=run_id,
+                      now_epoch=now,
+                      grace_seconds=grace,
+                      queue_status=queue_status,
+                  ):
                       runs.append(
                           {
                               "benchmark_uuid": benchmark_uuid,

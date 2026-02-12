@@ -20,6 +20,7 @@ SCFUZZBENCH_SHARD_RETRY_BASE_SECONDS=${SCFUZZBENCH_SHARD_RETRY_BASE_SECONDS:-30}
 SCFUZZBENCH_SHARD_RETRY_MAX_SECONDS=${SCFUZZBENCH_SHARD_RETRY_MAX_SECONDS:-300}
 SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS=${SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS:-600}
 SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS=${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS:-300}
+SCFUZZBENCH_RUNNING_STALE_SECONDS=${SCFUZZBENCH_RUNNING_STALE_SECONDS:-0}
 SCFUZZBENCH_LOCK_LEASE_SECONDS=${SCFUZZBENCH_LOCK_LEASE_SECONDS:-7200}
 SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS=${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS:-120}
 
@@ -46,6 +47,12 @@ if ! [[ "${SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SC
 fi
 if ! [[ "${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS}" -lt 30 ]]; then
   SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS=300
+fi
+if ! [[ "${SCFUZZBENCH_RUNNING_STALE_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_RUNNING_STALE_SECONDS}" -lt 60 ]]; then
+  SCFUZZBENCH_RUNNING_STALE_SECONDS=$((SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS + (SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS * 2) + 60))
+fi
+if [[ "${SCFUZZBENCH_RUNNING_STALE_SECONDS}" -lt 300 ]]; then
+  SCFUZZBENCH_RUNNING_STALE_SECONDS=300
 fi
 if ! [[ "${SCFUZZBENCH_LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_LOCK_LEASE_SECONDS}" -lt 300 ]]; then
   SCFUZZBENCH_LOCK_LEASE_SECONDS=7200
@@ -111,12 +118,94 @@ get_shard_status() {
   jq -r '.Item.status.S // "missing"' <<<"${item}"
 }
 
+shard_updated_age_seconds() {
+  local updated_at=$1
+  if [[ -z "${updated_at}" ]]; then
+    echo "${SCFUZZBENCH_RUNNING_STALE_SECONDS}"
+    return 0
+  fi
+  local updated_epoch
+  updated_epoch=$(python3 - "${updated_at}" <<'PY'
+import datetime
+import sys
+
+raw = sys.argv[1]
+try:
+    dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    print(int(dt.timestamp()))
+except Exception:
+    print(0)
+PY
+)
+  if ! [[ "${updated_epoch}" =~ ^[0-9]+$ ]] || (( updated_epoch <= 0 )); then
+    echo "${SCFUZZBENCH_RUNNING_STALE_SECONDS}"
+    return 0
+  fi
+  local now_epoch
+  now_epoch=$(date +%s)
+  local age=$((now_epoch - updated_epoch))
+  if (( age < 0 )); then
+    age=0
+  fi
+  echo "${age}"
+}
+
+retry_shard_transition() {
+  local max_attempts=$1
+  shift
+  local fn_name=$1
+  shift
+
+  local attempt=1
+  local rc=0
+  while true; do
+    if "${fn_name}" "$@"; then
+      return 0
+    fi
+    rc=$?
+    if (( rc == 1 )); then
+      return 1
+    fi
+    if (( attempt >= max_attempts )); then
+      return "${rc}"
+    fi
+    local delay=$((attempt * 2))
+    if (( delay > 10 )); then
+      delay=10
+    fi
+    sleep "${delay}" || true
+    attempt=$((attempt + 1))
+  done
+}
+
 handle_unclaimable_message() {
   local shard_key=$1
   local receipt_handle=$2
   local context=$3
+  local fallback_fuzzer_key=${4:-}
+  local fallback_run_index=${5:-}
+  local shard_item
+  shard_item=$(aws_cli dynamodb get-item \
+    --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
+    --key "$(shard_key_json "${shard_key}")" \
+    --consistent-read \
+    --output json 2>/dev/null || true)
   local current_status
-  current_status=$(get_shard_status "${shard_key}")
+  local current_attempts
+  local current_updated_at
+  local current_fuzzer_key
+  local current_run_index
+  current_status=$(jq -r '.Item.status.S // "missing"' <<<"${shard_item}")
+  current_attempts=$(jq -r '.Item.attempts.N // "0"' <<<"${shard_item}")
+  current_updated_at=$(jq -r '.Item.updated_at.S // ""' <<<"${shard_item}")
+  current_fuzzer_key=$(jq -r '.Item.fuzzer_key.S // empty' <<<"${shard_item}")
+  current_run_index=$(jq -r '.Item.run_index.N // empty' <<<"${shard_item}")
+  if [[ -z "${current_fuzzer_key}" ]]; then
+    current_fuzzer_key="${fallback_fuzzer_key}"
+  fi
+  if [[ -z "${current_run_index}" ]]; then
+    current_run_index="${fallback_run_index}"
+  fi
 
   case "${current_status}" in
     succeeded|failed|timed_out)
@@ -125,11 +214,42 @@ handle_unclaimable_message() {
       mark_run_completed_if_possible || true
       ;;
     running)
-      log "${context}: shard '${shard_key}' is still running; keeping message for retry."
+      local age_seconds
+      age_seconds=$(shard_updated_age_seconds "${current_updated_at}")
+      if (( age_seconds >= SCFUZZBENCH_RUNNING_STALE_SECONDS )); then
+        if ! [[ "${current_attempts}" =~ ^[0-9]+$ ]] || (( current_attempts < 1 )); then
+          current_attempts=1
+        fi
+        if [[ -n "${current_fuzzer_key}" && "${current_run_index}" =~ ^[0-9]+$ ]]; then
+          local reclaim_rc=0
+          if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${current_fuzzer_key}" "${current_run_index}" "${current_attempts}" "903" "stale_running_reclaim_age_${age_seconds}s"; then
+            local reclaim_delay
+            reclaim_delay=$(backoff_seconds "${current_attempts}")
+            log "${context}: reclaimed stale running shard '${shard_key}' (age=${age_seconds}s); retrying in ${reclaim_delay}s."
+            aws_cli sqs change-message-visibility \
+              --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+              --receipt-handle "${receipt_handle}" \
+              --visibility-timeout "${reclaim_delay}" \
+              >/dev/null || true
+            return
+          fi
+          reclaim_rc=$?
+          if (( reclaim_rc == 1 )); then
+            log "${context}: shard '${shard_key}' running reclaim raced with another transition; retrying shortly."
+            aws_cli sqs change-message-visibility \
+              --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+              --receipt-handle "${receipt_handle}" \
+              --visibility-timeout 15 \
+              >/dev/null || true
+            return
+          fi
+        fi
+      fi
+      log "${context}: shard '${shard_key}' is running (age=${age_seconds}s); extending visibility."
       aws_cli sqs change-message-visibility \
         --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
         --receipt-handle "${receipt_handle}" \
-        --visibility-timeout 30 \
+        --visibility-timeout "${SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS}" \
         >/dev/null || true
       ;;
     queued|retrying|launching)
@@ -561,6 +681,44 @@ heartbeat_visibility() {
   done
 }
 
+heartbeat_shard_state() {
+  local shard_key=$1
+  local fuzzer_key=$2
+  local run_index=$3
+  local attempts=$4
+  while true; do
+    sleep "${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS}" || true
+    local now
+    now=$(date -Is)
+    local names
+    local values
+    names=$(jq -cn '{"#status":"status"}')
+    values=$(jq -cn \
+      --arg running "running" \
+      --arg now "${now}" \
+      --arg fuzzer_key "${fuzzer_key}" \
+      --arg run_index "${run_index}" \
+      --arg attempts "${attempts}" \
+      --arg instance_id "${SCFUZZBENCH_INSTANCE_ID:-unknown}" \
+      '{
+        ":running":{S:$running},
+        ":now":{S:$now},
+        ":fuzzer_key":{S:$fuzzer_key},
+        ":run_index":{N:$run_index},
+        ":attempts":{N:$attempts},
+        ":instance_id":{S:$instance_id}
+      }')
+    aws_cli dynamodb update-item \
+      --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
+      --key "$(shard_key_json "${shard_key}")" \
+      --condition-expression "#status = :running AND attempts = :attempts" \
+      --update-expression "SET updated_at = :now, fuzzer_key = :fuzzer_key, run_index = :run_index, instance_id = :instance_id" \
+      --expression-attribute-names "${names}" \
+      --expression-attribute-values "${values}" \
+      >/dev/null 2>&1 || true
+  done
+}
+
 ensure_fuzzer_installed() {
   local fuzzer_key=$1
   local install_script="/opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh"
@@ -652,7 +810,7 @@ run_shard() {
   if ! claimed_attempt=$(claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}"); then
     claim_rc=$?
     if (( claim_rc == 1 )); then
-      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "claim"
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "claim" "${fuzzer_key}" "${run_index}"
       return 0
     fi
     log "Failed to claim shard '${shard_key}' due to transient error; keeping message for retry."
@@ -670,15 +828,44 @@ run_shard() {
   fi
 
   if ! ensure_fuzzer_installed "${fuzzer_key}"; then
-    local install_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "failed" "200" "install_failed" "failed_count"; then
-      delete_message_safe "${receipt_handle}"
-      mark_run_completed_if_possible || true
+    local install_exit_code=200
+    if (( claimed_attempt >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
+      local install_terminal_rc=0
+      if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "failed" "${install_exit_code}" "install_failed_terminal" "failed_count"; then
+        if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
+          aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
+        fi
+        delete_message_safe "${receipt_handle}"
+        mark_run_completed_if_possible || true
+        return 0
+      fi
+      install_terminal_rc=$?
+      if (( install_terminal_rc == 1 )); then
+        handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure terminal finalize" "${fuzzer_key}" "${run_index}"
+        return 0
+      fi
+      aws_cli sqs change-message-visibility \
+        --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+        --receipt-handle "${receipt_handle}" \
+        --visibility-timeout 30 \
+        >/dev/null || true
       return 0
     fi
-    install_finalize_rc=$?
-    if (( install_finalize_rc == 1 )); then
-      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure finalize"
+
+    local install_delay
+    install_delay=$(backoff_seconds "${claimed_attempt}")
+    local install_retry_rc=0
+    if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${install_exit_code}" "install_failed_retry_in_${install_delay}s"; then
+      aws_cli sqs change-message-visibility \
+        --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+        --receipt-handle "${receipt_handle}" \
+        --visibility-timeout "${install_delay}" \
+        >/dev/null || true
+      return 0
+    fi
+    install_retry_rc=$?
+    if (( install_retry_rc == 1 )); then
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure retry transition" "${fuzzer_key}" "${run_index}"
       return 0
     fi
     aws_cli sqs change-message-visibility \
@@ -696,7 +883,9 @@ run_shard() {
     >/dev/null || true
 
   heartbeat_visibility "${receipt_handle}" &
-  local heartbeat_pid=$!
+  local visibility_heartbeat_pid=$!
+  heartbeat_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" &
+  local shard_heartbeat_pid=$!
 
   local shard_root="/opt/scfuzzbench/shards/${shard_key}-a${claimed_attempt}-r${receive_count}"
   local artifact_suffix="${shard_key}-a${claimed_attempt}-r${receive_count}"
@@ -714,21 +903,23 @@ run_shard() {
   local exit_code=$?
   set -e
 
-  kill "${heartbeat_pid}" >/dev/null 2>&1 || true
-  wait "${heartbeat_pid}" >/dev/null 2>&1 || true
+  kill "${visibility_heartbeat_pid}" >/dev/null 2>&1 || true
+  wait "${visibility_heartbeat_pid}" >/dev/null 2>&1 || true
+  kill "${shard_heartbeat_pid}" >/dev/null 2>&1 || true
+  wait "${shard_heartbeat_pid}" >/dev/null 2>&1 || true
 
   rm -rf "${shard_root}" || true
 
   if [[ "${exit_code}" -eq 0 ]]; then
     local success_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "succeeded" "0" "" "succeeded_count"; then
+    if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "succeeded" "0" "" "succeeded_count"; then
       delete_message_safe "${receipt_handle}"
       mark_run_completed_if_possible || true
       return 0
     fi
     success_finalize_rc=$?
     if (( success_finalize_rc == 1 )); then
-      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "success finalize"
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "success finalize" "${fuzzer_key}" "${run_index}"
       return 0
     fi
     aws_cli sqs change-message-visibility \
@@ -746,7 +937,7 @@ run_shard() {
 
   if (( claimed_attempt >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
     local terminal_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
+    if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
       if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
         aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
       fi
@@ -756,7 +947,7 @@ run_shard() {
     fi
     terminal_finalize_rc=$?
     if (( terminal_finalize_rc == 1 )); then
-      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "terminal finalize"
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "terminal finalize" "${fuzzer_key}" "${run_index}"
       return 0
     fi
     aws_cli sqs change-message-visibility \
@@ -770,7 +961,7 @@ run_shard() {
   local delay
   delay=$(backoff_seconds "${claimed_attempt}")
   local retry_rc=0
-  if mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${exit_code}" "retry_in_${delay}s"; then
+  if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${exit_code}" "retry_in_${delay}s"; then
     aws_cli sqs change-message-visibility \
       --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
       --receipt-handle "${receipt_handle}" \
@@ -780,7 +971,7 @@ run_shard() {
   fi
   retry_rc=$?
   if (( retry_rc == 1 )); then
-    handle_unclaimable_message "${shard_key}" "${receipt_handle}" "retry transition"
+    handle_unclaimable_message "${shard_key}" "${receipt_handle}" "retry transition" "${fuzzer_key}" "${run_index}"
     return 0
   fi
   aws_cli sqs change-message-visibility \
