@@ -40,6 +40,12 @@ variable "instances_per_fuzzer" {
   default     = 10
 }
 
+variable "max_parallel_instances" {
+  type        = number
+  description = "Maximum concurrent worker instances. Set 0 to use all requested shards."
+  default     = 0
+}
+
 variable "timeout_hours" {
   type        = number
   description = "Timeout for each fuzzer run in hours."
@@ -153,6 +159,84 @@ variable "run_id" {
   type        = string
   description = "Run identifier (defaults to unix timestamp at apply time)."
   default     = ""
+}
+
+variable "run_state_table_name" {
+  type        = string
+  description = "Optional DynamoDB table name for run and shard state. Empty uses a generated name."
+  default     = ""
+}
+
+variable "control_lock_table_name" {
+  type        = string
+  description = "DynamoDB table name used by workflow global mutex lock."
+  default     = "scfuzzbench-control-locks"
+}
+
+variable "control_lock_name" {
+  type        = string
+  description = "Global lock key used to enforce a single active benchmark run."
+  default     = "benchmark-global-lock"
+}
+
+variable "queue_wait_seconds" {
+  type        = number
+  description = "SQS long-poll wait time for queue workers."
+  default     = 20
+}
+
+variable "queue_idle_polls" {
+  type        = number
+  description = "Number of consecutive empty polls before workers consider the queue drained."
+  default     = 3
+}
+
+variable "queue_empty_sleep_seconds" {
+  type        = number
+  description = "Sleep interval between empty queue polls."
+  default     = 10
+}
+
+variable "queue_visibility_timeout_seconds" {
+  type        = number
+  description = "Default SQS visibility timeout for shard messages."
+  default     = 300
+}
+
+variable "queue_visibility_extension_seconds" {
+  type        = number
+  description = "Visibility timeout extension applied while a shard is actively running."
+  default     = 600
+}
+
+variable "queue_visibility_heartbeat_seconds" {
+  type        = number
+  description = "Heartbeat interval for extending message visibility while shard execution is in progress."
+  default     = 300
+}
+
+variable "queue_message_retention_seconds" {
+  type        = number
+  description = "SQS message retention for shard queue and DLQ."
+  default     = 1209600
+}
+
+variable "shard_max_attempts" {
+  type        = number
+  description = "Maximum retry attempts per shard before terminal failure."
+  default     = 5
+}
+
+variable "shard_retry_base_seconds" {
+  type        = number
+  description = "Base retry delay in seconds for exponential shard retries."
+  default     = 30
+}
+
+variable "shard_retry_max_seconds" {
+  type        = number
+  description = "Maximum retry delay in seconds for exponential shard retries."
+  default     = 300
 }
 
 variable "tags" {

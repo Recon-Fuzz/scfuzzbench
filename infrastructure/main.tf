@@ -26,6 +26,11 @@ locals {
       echidna_version      = var.echidna_version
       medusa_version       = var.medusa_version
       fuzzer_keys          = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
+      queue_mode           = true
+      requested_shards     = local.requested_shard_count
+      max_parallel         = local.max_parallel_effective
+      shard_max_attempts   = var.shard_max_attempts
+      global_mutex         = true
     },
     contains(local.selected_fuzzer_keys, "echidna-symexec") ? {
       bitwuzla_version = var.bitwuzla_version
@@ -71,14 +76,34 @@ locals {
   instances = flatten([
     for fuzzer in local.fuzzer_definitions : [
       for index in range(var.instances_per_fuzzer) : {
-        key       = "${fuzzer.key}-${index}"
-        fuzzer    = fuzzer
-        run_index = index
+        key        = "${fuzzer.key}-${index}"
+        fuzzer_key = fuzzer.key
+        run_index  = index
       }
     ]
   ])
 
-  instance_map = { for instance in local.instances : instance.key => instance }
+  requested_shard_count  = length(local.instances)
+  max_parallel_requested = var.max_parallel_instances > 0 ? var.max_parallel_instances : local.requested_shard_count
+  max_parallel_effective = max(1, min(local.max_parallel_requested, local.requested_shard_count))
+  worker_slots = [
+    for index in range(local.max_parallel_effective) : {
+      key  = "worker-${index}"
+      slot = index
+    }
+  ]
+  worker_map = { for worker in local.worker_slots : worker.key => worker }
+  fuzzer_scripts = {
+    for fuzzer in local.fuzzer_definitions : fuzzer.key => {
+      install_sh = file(fuzzer.install_path)
+      run_sh     = file(fuzzer.run_path)
+    }
+  }
+  queue_name              = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-queue"
+  queue_dlq_name          = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-dlq"
+  run_state_table_name    = var.run_state_table_name != "" ? var.run_state_table_name : "${local.name_prefix}-run-state-${random_id.suffix.hex}"
+  control_lock_table_arn  = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.control_lock_table_name}"
+  control_lock_name_value = var.control_lock_name
 }
 
 resource "random_id" "suffix" {
@@ -224,6 +249,43 @@ resource "aws_s3_bucket_versioning" "logs" {
   }
 }
 
+resource "aws_sqs_queue" "shard_dlq" {
+  name                      = local.queue_dlq_name
+  message_retention_seconds = var.queue_message_retention_seconds
+  tags                      = local.tags
+}
+
+resource "aws_sqs_queue" "shard_queue" {
+  name                       = local.queue_name
+  message_retention_seconds  = var.queue_message_retention_seconds
+  visibility_timeout_seconds = var.queue_visibility_timeout_seconds
+  receive_wait_time_seconds  = var.queue_wait_seconds
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.shard_dlq.arn
+    maxReceiveCount     = var.shard_max_attempts
+  })
+  tags = local.tags
+}
+
+resource "aws_dynamodb_table" "run_state" {
+  name         = local.run_state_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  tags = local.tags
+}
+
 locals {
   bucket_name                 = var.existing_bucket_name != "" ? var.existing_bucket_name : try(aws_s3_bucket.logs[0].bucket, "")
   git_token_ssm_parameter_arn = var.git_token_ssm_parameter_name != "" ? "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${trimprefix(var.git_token_ssm_parameter_name, "/")}" : ""
@@ -291,6 +353,34 @@ data "aws_iam_policy_document" "s3_access" {
       resources = [statement.value]
     }
   }
+
+  statement {
+    actions = [
+      "sqs:GetQueueAttributes",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
+      "sqs:SendMessage",
+    ]
+    resources = [
+      aws_sqs_queue.shard_queue.arn,
+      aws_sqs_queue.shard_dlq.arn,
+    ]
+  }
+
+  statement {
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query",
+    ]
+    resources = [
+      aws_dynamodb_table.run_state.arn,
+      local.control_lock_table_arn,
+    ]
+  }
 }
 
 data "aws_iam_policy_document" "public_read" {
@@ -329,7 +419,7 @@ resource "aws_iam_instance_profile" "fuzzer" {
 }
 
 resource "aws_instance" "fuzzer" {
-  for_each = local.instance_map
+  for_each = local.worker_map
 
   ami                         = data.aws_ssm_parameter.ubuntu_ami.value
   instance_type               = var.instance_type
@@ -341,10 +431,9 @@ resource "aws_instance" "fuzzer" {
   user_data_replace_on_change = true
 
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
-    fuzzer_key                   = each.value.fuzzer.key
     shared_sh                    = file("${path.module}/../fuzzers/_shared/common.sh")
-    install_sh                   = file(each.value.fuzzer.install_path)
-    run_sh                       = file(each.value.fuzzer.run_path)
+    queue_worker_sh              = file("${path.module}/../fuzzers/_shared/queue_worker.sh")
+    fuzzer_scripts               = local.fuzzer_scripts
     aws_region                   = var.aws_region
     s3_bucket                    = local.bucket_name
     run_id                       = local.run_id
@@ -362,6 +451,20 @@ resource "aws_instance" "fuzzer" {
     bitwuzla_version             = var.bitwuzla_version
     git_token_ssm_parameter_name = var.git_token_ssm_parameter_name
     fuzzer_env                   = var.fuzzer_env
+    queue_url                    = aws_sqs_queue.shard_queue.id
+    queue_dlq_url                = aws_sqs_queue.shard_dlq.id
+    queue_wait_seconds           = var.queue_wait_seconds
+    queue_idle_polls             = var.queue_idle_polls
+    queue_empty_sleep_seconds    = var.queue_empty_sleep_seconds
+    shard_max_attempts           = var.shard_max_attempts
+    shard_retry_base_seconds     = var.shard_retry_base_seconds
+    shard_retry_max_seconds      = var.shard_retry_max_seconds
+    visibility_extension_seconds = var.queue_visibility_extension_seconds
+    visibility_heartbeat_seconds = var.queue_visibility_heartbeat_seconds
+    run_state_table              = aws_dynamodb_table.run_state.name
+    control_lock_table           = var.control_lock_table_name
+    control_lock_name            = local.control_lock_name_value
+    max_parallel_effective       = local.max_parallel_effective
   }))
 
   root_block_device {
@@ -374,8 +477,7 @@ resource "aws_instance" "fuzzer" {
   }
 
   tags = merge(local.tags, {
-    Name     = "${local.name_prefix}-${each.value.fuzzer.key}-${each.value.run_index}"
-    Fuzzer   = each.value.fuzzer.key
-    RunIndex = tostring(each.value.run_index)
+    Name       = "${local.name_prefix}-worker-${each.value.slot}"
+    WorkerSlot = tostring(each.value.slot)
   })
 }
