@@ -22,6 +22,10 @@ def aws(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[s
     return proc
 
 
+def _is_conditional_check_failed(text: str) -> bool:
+    return "ConditionalCheckFailedException" in text or "ConditionalCheckFailed" in text
+
+
 def emit_output(key: str, value: str) -> None:
     out_path = os.environ.get("GITHUB_OUTPUT", "").strip()
     if out_path:
@@ -202,6 +206,9 @@ def assess_release_safety(
         ):
             safe_to_release = False
             reasons.append("queue-init-summary indicates active shard state")
+    elif run_metadata_path.exists():
+        safe_to_release = False
+        reasons.append("missing queue-init-summary after bootstrap attempt; conservatively keep lock")
 
     if run_metadata_path.exists():
         metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
@@ -272,21 +279,38 @@ def assess_release_safety(
 def release_lock(table_name: str, lock_name: str, owner_run_id: str) -> None:
     key = {"lock_name": {"S": lock_name}}
     values = {":owner": {"S": owner_run_id}}
-    aws(
-        [
-            "dynamodb",
-            "delete-item",
-            "--table-name",
-            table_name,
-            "--key",
-            json.dumps(key, separators=(",", ":")),
-            "--condition-expression",
-            "owner_run_id = :owner",
-            "--expression-attribute-values",
-            json.dumps(values, separators=(",", ":")),
-        ],
-        check=False,
-    )
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        proc = aws(
+            [
+                "dynamodb",
+                "delete-item",
+                "--table-name",
+                table_name,
+                "--key",
+                json.dumps(key, separators=(",", ":")),
+                "--condition-expression",
+                "owner_run_id = :owner",
+                "--expression-attribute-values",
+                json.dumps(values, separators=(",", ":")),
+            ],
+            check=False,
+        )
+        if proc.returncode == 0:
+            return
+
+        err_text = (proc.stderr or proc.stdout or "").strip()
+        if _is_conditional_check_failed(err_text):
+            # If ownership changed or lock is already gone, treat release as complete.
+            return
+
+        if attempt >= max_attempts:
+            raise AwsError(f"Failed to release lock after {max_attempts} attempts: {err_text}")
+
+        delay = min(10, 2 ** (attempt - 1))
+        delay = max(1, delay + random.randint(0, 2))
+        print(f"Lock release failed (attempt {attempt}/{max_attempts}): {err_text}; retrying in {delay}s", flush=True)
+        time.sleep(delay)
 
 
 def parse_args() -> argparse.Namespace:

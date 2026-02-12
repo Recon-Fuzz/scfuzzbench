@@ -517,12 +517,41 @@ release_global_lock() {
   values=$(jq -cn --arg owner "${SCFUZZBENCH_RUN_ID}" '{":owner":{S:$owner}}')
   local key
   key=$(jq -cn --arg name "${SCFUZZBENCH_LOCK_NAME}" '{lock_name:{S:$name}}')
-  aws_cli dynamodb delete-item \
-    --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
-    --key "${key}" \
-    --condition-expression "owner_run_id = :owner" \
-    --expression-attribute-values "${values}" \
-    >/dev/null || true
+  local attempt=1
+  local max_attempts=5
+  local output=""
+  local rc=0
+  while (( attempt <= max_attempts )); do
+    set +e
+    output=$(aws_cli dynamodb delete-item \
+      --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
+      --key "${key}" \
+      --condition-expression "owner_run_id = :owner" \
+      --expression-attribute-values "${values}" \
+      --output json 2>&1)
+    rc=$?
+    set -e
+    if (( rc == 0 )); then
+      return 0
+    fi
+    if grep -Eq "ConditionalCheckFailedException|ConditionalCheckFailed" <<<"${output}"; then
+      # Ownership changed or lock already removed; treat as released.
+      return 0
+    fi
+    if (( attempt >= max_attempts )); then
+      log "Failed to release global lock after ${max_attempts} attempts: ${output}"
+      return 1
+    fi
+    local delay=$((attempt * 2))
+    if (( delay > 10 )); then
+      delay=10
+    fi
+    delay=$((delay + (RANDOM % 3)))
+    log "Global lock release failed (attempt ${attempt}/${max_attempts}): ${output}; retrying in ${delay}s."
+    sleep "${delay}" || true
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 extend_global_lock_lease() {
@@ -757,8 +786,10 @@ mark_run_completed_if_possible() {
   failed=$(run_meta_num "${meta}" "failed_count" 0)
 
   if [[ "${status}" == "completed" || "${status}" == "failed" ]]; then
-    release_global_lock
-    return 0
+    if release_global_lock; then
+      return 0
+    fi
+    return 1
   fi
   if (( succeeded + failed < requested )); then
     return 1
@@ -777,7 +808,10 @@ mark_run_completed_if_possible() {
   fi
 
   log "Run completed: succeeded=${succeeded}, failed=${failed}, requested=${requested}"
-  release_global_lock
+  if ! release_global_lock; then
+    log "Run status is terminal but lock release failed; will retry."
+    return 1
+  fi
   return 0
 }
 

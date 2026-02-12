@@ -68,6 +68,11 @@ Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/
 - Lock orchestration (table ensure/acquire/release guard/release) is centralized in `scripts/benchmark_lock.py`.
 - Default lock acquire timeout is `0` (unbounded by policy); optional positive timeout values enable explicit fail-fast lock waits.
 - Lock waiting is still bounded by GitHub Actions job runtime limits.
+- On bootstrap failure with activity evidence, lock release is intentionally blocked to prevent overlapping active runs.
+- Operational recovery for a conservatively kept lock:
+  - Read lock holder from `scfuzzbench-control-locks/benchmark-global-lock`.
+  - Verify queue is idle and run-state is terminal for the holder run.
+  - Release with owner-guarded DynamoDB delete (`owner_run_id` condition).
 - Clone target repository and checkout pinned commit, then build with `forge build`.
 - Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).
 - Collect runner metrics into `runner_metrics.csv`.

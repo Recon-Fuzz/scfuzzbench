@@ -234,6 +234,13 @@ Two workflows publish runs and releases directly from CI/CD:
   - Lock orchestration is centralized in `scripts/benchmark_lock.py` (table ensure/acquire/release-guard/release).
   - `SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS=0` (default) means lock waiting does not time out by policy. Set it to `>0` for explicit fail-fast behavior.
   - Lock waiting is still bounded by GitHub Actions job runtime limits.
+  - If bootstrap fails after lock acquisition and queue/run-state evidence suggests possible activity, the workflow keeps the lock conservatively.
+  - Recovery flow for a conservatively kept lock:
+    1. Inspect lock holder:
+       `aws dynamodb get-item --table-name scfuzzbench-control-locks --key '{"lock_name":{"S":"benchmark-global-lock"}}' --consistent-read --output json`
+    2. If the holder run is still active, let workers finish and release naturally.
+    3. If the holder run is not active, verify shard queue and run-state are terminal/idle, then release:
+       `aws dynamodb delete-item --table-name scfuzzbench-control-locks --key '{"lock_name":{"S":"benchmark-global-lock"}}' --condition-expression 'owner_run_id = :owner' --expression-attribute-values '{":owner":{"S":"<run_id>"}}'`
   - Auto-discovers an effective parallel worker cap from EC2 quota signals when available.
   - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
     `TF_BACKEND_CONFIG` (for remote state).
