@@ -64,6 +64,8 @@ Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/
 - Queue init seeds one message per `(fuzzer, run_index)` shard.
 - Shard lifecycle in run-state table is explicit: `launching -> queued -> running -> (succeeded|failed|timed_out)` with `retrying` on retry backoff.
 - Worker polls queue, receives one shard, installs that shard's fuzzer if needed, and runs it.
+- Benchmark requests contend on a global lock with exponential backoff.
+- Lock waiting is bounded by workflow timeout/runtime limits; if a request times out waiting, it should be retried.
 - Clone target repository and checkout pinned commit, then build with `forge build`.
 - Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).
 - Collect runner metrics into `runner_metrics.csv`.

@@ -155,7 +155,6 @@ claim_shard_for_processing() {
   local shard_key=$1
   local fuzzer_key=$2
   local run_index=$3
-  local attempts=$4
   local now
   now=$(date -Is)
 
@@ -169,9 +168,10 @@ claim_shard_for_processing() {
     --arg running "running" \
     --arg fuzzer_key "${fuzzer_key}" \
     --arg run_index "${run_index}" \
-    --arg attempts "${attempts}" \
     --arg instance_id "${SCFUZZBENCH_INSTANCE_ID:-unknown}" \
     --arg now "${now}" \
+    --arg zero "0" \
+    --arg one "1" \
     '{
       ":queued":{S:$queued},
       ":retrying":{S:$retrying},
@@ -179,9 +179,10 @@ claim_shard_for_processing() {
       ":running":{S:$running},
       ":fuzzer_key":{S:$fuzzer_key},
       ":run_index":{N:$run_index},
-      ":attempts":{N:$attempts},
       ":instance_id":{S:$instance_id},
-      ":now":{S:$now}
+      ":now":{S:$now},
+      ":zero":{N:$zero},
+      ":one":{N:$one}
     }')
 
   local output
@@ -191,16 +192,24 @@ claim_shard_for_processing() {
     --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
     --key "$(shard_key_json "${shard_key}")" \
     --condition-expression "#status = :queued OR #status = :retrying OR #status = :launching" \
-    --update-expression "SET #status = :running, fuzzer_key = :fuzzer_key, run_index = :run_index, attempts = :attempts, instance_id = :instance_id, updated_at = :now" \
+    --update-expression "SET #status = :running, fuzzer_key = :fuzzer_key, run_index = :run_index, attempts = if_not_exists(attempts, :zero) + :one, instance_id = :instance_id, updated_at = :now" \
     --expression-attribute-names "${names}" \
     --expression-attribute-values "${values}" \
+    --return-values ALL_NEW \
     --output json 2>&1)
   rc=$?
   set -e
   if (( rc == 0 )); then
-    return 0
+    local claimed_attempt
+    claimed_attempt=$(jq -r '.Attributes.attempts.N // empty' <<<"${output}")
+    if [[ "${claimed_attempt}" =~ ^[0-9]+$ ]] && (( claimed_attempt >= 1 )); then
+      echo "${claimed_attempt}"
+      return 0
+    fi
+    log "Shard '${shard_key}' claim succeeded but attempts counter missing in response."
+    return 2
   fi
-  if grep -q "ConditionalCheckFailedException" <<<"${output}"; then
+  if grep -Eq "ConditionalCheckFailedException|ConditionalCheckFailed" <<<"${output}"; then
     return 1
   fi
   log "Failed to claim shard '${shard_key}': ${output}"
@@ -359,14 +368,27 @@ set_run_status() {
   local names
   names=$(jq -cn '{"#status":"status"}')
 
-  aws_cli dynamodb update-item \
+  local output
+  local rc
+  set +e
+  output=$(aws_cli dynamodb update-item \
     --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
     --key "$(meta_key_json)" \
     --condition-expression "#status = :running" \
     --update-expression "SET #status = :status, completed_at = :now, updated_at = :now" \
     --expression-attribute-names "${names}" \
     --expression-attribute-values "${values}" \
-    >/dev/null
+    --output json 2>&1)
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if grep -Eq "ConditionalCheckFailedException|ConditionalCheckFailed" <<<"${output}"; then
+    return 1
+  fi
+  log "Failed to set run status '${new_status}': ${output}"
+  return 2
 }
 
 release_global_lock() {
@@ -421,9 +443,10 @@ upload_final_manifest_json() {
   local final_manifest="${tmp_dir}/manifest-final.json"
   mkdir -p "${tmp_dir}"
 
-  if ! aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/manifest.json" "${base_manifest}" --no-progress >/dev/null 2>&1; then
-    if ! aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/manifest.json" "${base_manifest}" --no-progress >/dev/null 2>&1; then
-      echo '{}' >"${base_manifest}"
+  if ! retry_cmd 5 30 aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/manifest.json" "${base_manifest}" --no-progress; then
+    if ! retry_cmd 5 30 aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/manifest.json" "${base_manifest}" --no-progress; then
+      log "Skipping final manifest update: unable to read base manifest from runs/ or logs/."
+      return 1
     fi
   fi
 
@@ -484,7 +507,9 @@ upload_run_status_json() {
 
   retry_cmd 5 30 aws_cli s3 cp "${status_file}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/status.json" --no-progress
   retry_cmd 5 30 aws_cli s3 cp "${status_file}" "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/status.json" --no-progress
-  upload_final_manifest_json "${status}" "${requested}" "${succeeded}" "${failed}" "${completed_at}"
+  if ! upload_final_manifest_json "${status}" "${requested}" "${succeeded}" "${failed}" "${completed_at}"; then
+    log "status.json uploaded, but final manifest merge/upload failed."
+  fi
 }
 
 queue_counts() {
@@ -573,17 +598,29 @@ mark_run_completed_if_possible() {
   failed=$(run_meta_num "${meta}" "failed_count" 0)
 
   if [[ "${status}" == "completed" || "${status}" == "failed" ]]; then
+    release_global_lock
     return 0
   fi
   if (( succeeded + failed < requested )); then
     return 1
   fi
 
-  if set_run_status "completed"; then
-    log "Run completed: succeeded=${succeeded}, failed=${failed}, requested=${requested}"
-    upload_run_status_json "completed"
-    release_global_lock
+  if ! upload_run_status_json "completed"; then
+    log "Failed to publish terminal status.json; keeping run in running state for retry."
+    return 1
   fi
+
+  local status_rc=0
+  if ! set_run_status "completed"; then
+    status_rc=$?
+    if (( status_rc > 1 )); then
+      log "Failed to persist terminal run-state status after publishing status.json."
+      return 1
+    fi
+  fi
+
+  log "Run completed: succeeded=${succeeded}, failed=${failed}, requested=${requested}"
+  release_global_lock
   return 0
 }
 
@@ -610,8 +647,9 @@ run_shard() {
     return 0
   fi
 
+  local claimed_attempt=""
   local claim_rc=0
-  if ! claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}"; then
+  if ! claimed_attempt=$(claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}"); then
     claim_rc=$?
     if (( claim_rc == 1 )); then
       handle_unclaimable_message "${shard_key}" "${receipt_handle}" "claim"
@@ -626,9 +664,14 @@ run_shard() {
     return 0
   fi
 
+  if ! [[ "${claimed_attempt}" =~ ^[0-9]+$ ]] || (( claimed_attempt < 1 )); then
+    log "Invalid claimed attempt for shard '${shard_key}': ${claimed_attempt}; defaulting to 1."
+    claimed_attempt=1
+  fi
+
   if ! ensure_fuzzer_installed "${fuzzer_key}"; then
     local install_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "failed" "200" "install_failed" "failed_count"; then
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "failed" "200" "install_failed" "failed_count"; then
       delete_message_safe "${receipt_handle}"
       mark_run_completed_if_possible || true
       return 0
@@ -655,8 +698,8 @@ run_shard() {
   heartbeat_visibility "${receipt_handle}" &
   local heartbeat_pid=$!
 
-  local shard_root="/opt/scfuzzbench/shards/${shard_key}-a${receive_count}"
-  local artifact_suffix="${shard_key}-a${receive_count}"
+  local shard_root="/opt/scfuzzbench/shards/${shard_key}-a${claimed_attempt}-r${receive_count}"
+  local artifact_suffix="${shard_key}-a${claimed_attempt}-r${receive_count}"
   rm -rf "${shard_root}" || true
   mkdir -p "${shard_root}"
 
@@ -678,7 +721,7 @@ run_shard() {
 
   if [[ "${exit_code}" -eq 0 ]]; then
     local success_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "succeeded" "0" "" "succeeded_count"; then
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "succeeded" "0" "" "succeeded_count"; then
       delete_message_safe "${receipt_handle}"
       mark_run_completed_if_possible || true
       return 0
@@ -701,9 +744,9 @@ run_shard() {
     failure_status="timed_out"
   fi
 
-  if (( receive_count >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
+  if (( claimed_attempt >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
     local terminal_finalize_rc=0
-    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
       if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
         aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
       fi
@@ -725,9 +768,9 @@ run_shard() {
   fi
 
   local delay
-  delay=$(backoff_seconds "${receive_count}")
+  delay=$(backoff_seconds "${claimed_attempt}")
   local retry_rc=0
-  if mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "${exit_code}" "retry_in_${delay}s"; then
+  if mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${exit_code}" "retry_in_${delay}s"; then
     aws_cli sqs change-message-visibility \
       --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
       --receipt-handle "${receipt_handle}" \

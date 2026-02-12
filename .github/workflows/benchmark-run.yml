@@ -541,7 +541,7 @@ jobs:
           while true; do
             now_epoch="$(date +%s)"
             if (( now_epoch >= deadline_epoch )); then
-              echo "Timed out waiting for global lock after ${LOCK_WAIT_TIMEOUT_SECONDS}s." >&2
+              echo "Timed out waiting for global lock after ${LOCK_WAIT_TIMEOUT_SECONDS}s. Lock wait is bounded by workflow runtime; re-dispatch the benchmark request." >&2
               exit 1
             fi
 
@@ -790,15 +790,92 @@ jobs:
             --run-id "$(jq -r '.run_id.value' run_metadata.json)" \
             --benchmark-uuid "$(jq -r '.benchmark_uuid.value' run_metadata.json)" \
             --max-parallel-effective "$(jq -r '.max_parallel_effective.value' run_metadata.json)" \
-            --shards-json shards.json
+            --shards-json shards.json \
+            --summary-path queue-init-summary.json
 
       - name: Mark lock handoff
         id: lock_handoff
         if: ${{ steps.init_queue.outcome == 'success' }}
         run: echo "handoff=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Assess lock release safety on bootstrap failure
+        id: lock_release_guard
+        if: ${{ always() && steps.lock.outputs.lock_acquired == 'true' && steps.lock_handoff.outputs.handoff != 'true' }}
+        run: |
+          set -euo pipefail
+          safe_to_release=true
+          reasons=()
+
+          if [[ -f queue-init-summary.json ]]; then
+            any_enqueue_succeeded="$(jq -r '.any_enqueue_succeeded // false' queue-init-summary.json)"
+            enqueued_now="$(jq -r '.enqueued_now // 0' queue-init-summary.json)"
+            already_enqueued="$(jq -r '.already_enqueued // 0' queue-init-summary.json)"
+            already_running_or_terminal="$(jq -r '.already_running_or_terminal // 0' queue-init-summary.json)"
+            bootstrap_marked_failed="$(jq -r '.bootstrap_marked_failed // 0' queue-init-summary.json)"
+            if [[ "${any_enqueue_succeeded}" == "true" ]] || (( enqueued_now > 0 )) || (( already_enqueued > 0 )) || (( already_running_or_terminal > 0 )) || (( bootstrap_marked_failed > 0 )); then
+              safe_to_release=false
+              reasons+=("queue-init-summary indicates active shard state")
+            fi
+          fi
+
+          if [[ -f run_metadata.json ]]; then
+            queue_url="$(jq -r '.queue_url.value // empty' run_metadata.json)"
+            run_state_table="$(jq -r '.run_state_table_name.value // empty' run_metadata.json)"
+            run_id="$(jq -r '.run_id.value // empty' run_metadata.json)"
+            benchmark_uuid="$(jq -r '.benchmark_uuid.value // empty' run_metadata.json)"
+
+            if [[ -n "${queue_url}" ]]; then
+              attrs_json="$(aws sqs get-queue-attributes \
+                --queue-url "${queue_url}" \
+                --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+                --output json 2>/dev/null || true)"
+              visible="$(jq -r '.Attributes.ApproximateNumberOfMessages // "0"' <<<"${attrs_json}")"
+              inflight="$(jq -r '.Attributes.ApproximateNumberOfMessagesNotVisible // "0"' <<<"${attrs_json}")"
+              if ! [[ "${visible}" =~ ^[0-9]+$ ]]; then visible=0; fi
+              if ! [[ "${inflight}" =~ ^[0-9]+$ ]]; then inflight=0; fi
+              if (( visible > 0 || inflight > 0 )); then
+                safe_to_release=false
+                reasons+=("queue has pending/inflight messages (${visible}/${inflight})")
+              fi
+            fi
+
+            if [[ -n "${run_state_table}" && -n "${run_id}" && -n "${benchmark_uuid}" ]]; then
+              run_pk="RUN#${run_id}#${benchmark_uuid}"
+              meta_json="$(aws dynamodb get-item \
+                --table-name "${run_state_table}" \
+                --key "$(jq -cn --arg pk "${run_pk}" '{pk:{S:$pk}, sk:{S:"META"}}')" \
+                --consistent-read \
+                --output json 2>/dev/null || true)"
+              run_status="$(jq -r '.Item.status.S // ""' <<<"${meta_json}")"
+              if [[ "${run_status}" == "running" ]]; then
+                safe_to_release=false
+                reasons+=("run-state META status=running")
+              fi
+            fi
+          fi
+
+          if (( ${#reasons[@]} == 0 )); then
+            reason_text="no active queue/run-state evidence"
+          else
+            reason_text="$(IFS='; '; echo "${reasons[*]}")"
+          fi
+
+          {
+            echo "safe_to_release=${safe_to_release}"
+            echo "reason=${reason_text}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Keep lock after bootstrap failure when active run evidence exists
+        if: ${{ failure() && steps.lock.outputs.lock_acquired == 'true' && steps.lock_handoff.outputs.handoff != 'true' && steps.lock_release_guard.outputs.safe_to_release != 'true' }}
+        run: |
+          {
+            echo "Bootstrap failed after lock acquire."
+            echo "Keeping global lock to avoid overlap with potentially active queue workers."
+            echo "Reason: ${{ steps.lock_release_guard.outputs.reason }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Release global lock on bootstrap failure
-        if: ${{ failure() && steps.lock.outputs.lock_acquired == 'true' && steps.lock_handoff.outputs.handoff != 'true' }}
+        if: ${{ failure() && steps.lock.outputs.lock_acquired == 'true' && steps.lock_handoff.outputs.handoff != 'true' && steps.lock_release_guard.outputs.safe_to_release == 'true' }}
         env:
           RUN_ID: ${{ steps.shard_plan.outputs.run_id }}
         run: |
