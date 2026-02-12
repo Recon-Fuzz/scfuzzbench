@@ -70,6 +70,8 @@ export SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS="${visibility_heartbeat_seconds}
 export SCFUZZBENCH_RUN_STATE_TABLE="${run_state_table}"
 export SCFUZZBENCH_LOCK_TABLE="${control_lock_table}"
 export SCFUZZBENCH_LOCK_NAME="${control_lock_name}"
+export SCFUZZBENCH_LOCK_LEASE_SECONDS="${control_lock_lease_seconds}"
+export SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS="${control_lock_heartbeat_seconds}"
 export SCFUZZBENCH_MAX_PARALLEL_EFFECTIVE="${max_parallel_effective}"
 
 %{ for key, value in fuzzer_env ~}

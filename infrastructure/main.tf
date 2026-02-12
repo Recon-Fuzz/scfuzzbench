@@ -11,26 +11,28 @@ locals {
 
   benchmark_manifest = merge(
     {
-      scfuzzbench_commit   = var.scfuzzbench_commit
-      target_repo_url      = var.target_repo_url
-      target_commit        = var.target_commit
-      benchmark_type       = var.benchmark_type
-      instance_type        = var.instance_type
-      instances_per_fuzzer = var.instances_per_fuzzer
-      timeout_hours        = var.timeout_hours
-      aws_region           = var.aws_region
-      ubuntu_ami_id        = data.aws_ssm_parameter.ubuntu_ami.value
-      foundry_version      = var.foundry_version
-      foundry_git_repo     = var.foundry_git_repo
-      foundry_git_ref      = var.foundry_git_ref
-      echidna_version      = var.echidna_version
-      medusa_version       = var.medusa_version
-      fuzzer_keys          = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
-      queue_mode           = true
-      requested_shards     = local.requested_shard_count
-      max_parallel         = local.max_parallel_effective
-      shard_max_attempts   = var.shard_max_attempts
-      global_mutex         = true
+      scfuzzbench_commit            = var.scfuzzbench_commit
+      target_repo_url               = var.target_repo_url
+      target_commit                 = var.target_commit
+      benchmark_type                = var.benchmark_type
+      instance_type                 = var.instance_type
+      instances_per_fuzzer          = var.instances_per_fuzzer
+      timeout_hours                 = var.timeout_hours
+      aws_region                    = var.aws_region
+      ubuntu_ami_id                 = data.aws_ssm_parameter.ubuntu_ami.value
+      foundry_version               = var.foundry_version
+      foundry_git_repo              = var.foundry_git_repo
+      foundry_git_ref               = var.foundry_git_ref
+      echidna_version               = var.echidna_version
+      medusa_version                = var.medusa_version
+      fuzzer_keys                   = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
+      queue_mode                    = true
+      requested_shards              = local.requested_shard_count
+      max_parallel                  = local.max_parallel_effective
+      shard_max_attempts            = var.shard_max_attempts
+      global_mutex                  = true
+      global_lock_lease_seconds     = var.control_lock_lease_seconds
+      global_lock_heartbeat_seconds = var.control_lock_heartbeat_seconds
     },
     contains(local.selected_fuzzer_keys, "echidna-symexec") ? {
       bitwuzla_version = var.bitwuzla_version
@@ -373,6 +375,7 @@ data "aws_iam_policy_document" "s3_access" {
       "dynamodb:GetItem",
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
+      "dynamodb:TransactWriteItems",
       "dynamodb:DeleteItem",
       "dynamodb:Query",
     ]
@@ -431,40 +434,42 @@ resource "aws_instance" "fuzzer" {
   user_data_replace_on_change = true
 
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
-    shared_sh                    = file("${path.module}/../fuzzers/_shared/common.sh")
-    queue_worker_sh              = file("${path.module}/../fuzzers/_shared/queue_worker.sh")
-    fuzzer_scripts               = local.fuzzer_scripts
-    aws_region                   = var.aws_region
-    s3_bucket                    = local.bucket_name
-    run_id                       = local.run_id
-    benchmark_uuid               = local.benchmark_uuid
-    benchmark_manifest_b64       = local.benchmark_manifest_b64
-    timeout_seconds              = local.timeout_seconds
-    repo_url                     = var.target_repo_url
-    repo_commit                  = var.target_commit
-    benchmark_type               = var.benchmark_type
-    foundry_version              = var.foundry_version
-    foundry_git_repo             = var.foundry_git_repo
-    foundry_git_ref              = var.foundry_git_ref
-    echidna_version              = var.echidna_version
-    medusa_version               = var.medusa_version
-    bitwuzla_version             = var.bitwuzla_version
-    git_token_ssm_parameter_name = var.git_token_ssm_parameter_name
-    fuzzer_env                   = var.fuzzer_env
-    queue_url                    = aws_sqs_queue.shard_queue.id
-    queue_dlq_url                = aws_sqs_queue.shard_dlq.id
-    queue_wait_seconds           = var.queue_wait_seconds
-    queue_idle_polls             = var.queue_idle_polls
-    queue_empty_sleep_seconds    = var.queue_empty_sleep_seconds
-    shard_max_attempts           = var.shard_max_attempts
-    shard_retry_base_seconds     = var.shard_retry_base_seconds
-    shard_retry_max_seconds      = var.shard_retry_max_seconds
-    visibility_extension_seconds = var.queue_visibility_extension_seconds
-    visibility_heartbeat_seconds = var.queue_visibility_heartbeat_seconds
-    run_state_table              = aws_dynamodb_table.run_state.name
-    control_lock_table           = var.control_lock_table_name
-    control_lock_name            = local.control_lock_name_value
-    max_parallel_effective       = local.max_parallel_effective
+    shared_sh                      = file("${path.module}/../fuzzers/_shared/common.sh")
+    queue_worker_sh                = file("${path.module}/../fuzzers/_shared/queue_worker.sh")
+    fuzzer_scripts                 = local.fuzzer_scripts
+    aws_region                     = var.aws_region
+    s3_bucket                      = local.bucket_name
+    run_id                         = local.run_id
+    benchmark_uuid                 = local.benchmark_uuid
+    benchmark_manifest_b64         = local.benchmark_manifest_b64
+    timeout_seconds                = local.timeout_seconds
+    repo_url                       = var.target_repo_url
+    repo_commit                    = var.target_commit
+    benchmark_type                 = var.benchmark_type
+    foundry_version                = var.foundry_version
+    foundry_git_repo               = var.foundry_git_repo
+    foundry_git_ref                = var.foundry_git_ref
+    echidna_version                = var.echidna_version
+    medusa_version                 = var.medusa_version
+    bitwuzla_version               = var.bitwuzla_version
+    git_token_ssm_parameter_name   = var.git_token_ssm_parameter_name
+    fuzzer_env                     = var.fuzzer_env
+    queue_url                      = aws_sqs_queue.shard_queue.id
+    queue_dlq_url                  = aws_sqs_queue.shard_dlq.id
+    queue_wait_seconds             = var.queue_wait_seconds
+    queue_idle_polls               = var.queue_idle_polls
+    queue_empty_sleep_seconds      = var.queue_empty_sleep_seconds
+    shard_max_attempts             = var.shard_max_attempts
+    shard_retry_base_seconds       = var.shard_retry_base_seconds
+    shard_retry_max_seconds        = var.shard_retry_max_seconds
+    visibility_extension_seconds   = var.queue_visibility_extension_seconds
+    visibility_heartbeat_seconds   = var.queue_visibility_heartbeat_seconds
+    run_state_table                = aws_dynamodb_table.run_state.name
+    control_lock_table             = var.control_lock_table_name
+    control_lock_name              = local.control_lock_name_value
+    control_lock_lease_seconds     = var.control_lock_lease_seconds
+    control_lock_heartbeat_seconds = var.control_lock_heartbeat_seconds
+    max_parallel_effective         = local.max_parallel_effective
   }))
 
   root_block_device {

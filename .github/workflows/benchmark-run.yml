@@ -188,6 +188,12 @@ jobs:
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
       SCFUZZBENCH_LOCK_TABLE: scfuzzbench-control-locks
       SCFUZZBENCH_LOCK_NAME: benchmark-global-lock
+      SCFUZZBENCH_LOCK_LEASE_SECONDS: "7200"
+      SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS: "21600"
+      SCFUZZBENCH_LOCK_ACQUIRE_MAX_BACKOFF_SECONDS: "120"
+      TF_APPLY_MAX_ATTEMPTS: "6"
+      TF_APPLY_BASE_BACKOFF_SECONDS: "30"
+      TF_APPLY_MAX_BACKOFF_SECONDS: "300"
     steps:
       - name: Checkout (tarball)
         timeout-minutes: 5
@@ -512,37 +518,90 @@ jobs:
         id: lock
         env:
           RUN_ID: ${{ steps.shard_plan.outputs.run_id }}
-          TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
+          LOCK_LEASE_SECONDS: ${{ env.SCFUZZBENCH_LOCK_LEASE_SECONDS }}
+          LOCK_WAIT_TIMEOUT_SECONDS: ${{ env.SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS }}
+          LOCK_MAX_BACKOFF_SECONDS: ${{ env.SCFUZZBENCH_LOCK_ACQUIRE_MAX_BACKOFF_SECONDS }}
         run: |
           set -euo pipefail
-          now_epoch="$(date +%s)"
-          expires_epoch="$(python3 - <<'PY'
-          import os
-          import time
-          now = int(time.time())
-          timeout_hours = float(os.environ["TIMEOUT_HOURS"])
-          # timeout + 2h grace for teardown and queue drain finalization
-          print(now + int(timeout_hours * 3600) + 7200)
-          PY
-          )"
-          acquired_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if ! [[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_LEASE_SECONDS < 300 )); then
+            echo "Invalid lock lease seconds: ${LOCK_LEASE_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_WAIT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_WAIT_TIMEOUT_SECONDS < 60 )); then
+            echo "Invalid lock wait timeout: ${LOCK_WAIT_TIMEOUT_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_MAX_BACKOFF_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_MAX_BACKOFF_SECONDS < 5 )); then
+            echo "Invalid lock max backoff: ${LOCK_MAX_BACKOFF_SECONDS}" >&2
+            exit 1
+          fi
 
-          item="$(jq -cn \
-            --arg lock_name "${SCFUZZBENCH_LOCK_NAME}" \
-            --arg owner_run_id "${RUN_ID}" \
-            --arg acquired_at "${acquired_at}" \
-            --arg expires_at "${expires_epoch}" \
-            --arg workflow_run_id "${GITHUB_RUN_ID}" \
-            '{lock_name:{S:$lock_name},owner_run_id:{S:$owner_run_id},acquired_at:{S:$acquired_at},expires_at:{N:$expires_at},workflow_run_id:{S:$workflow_run_id}}')"
-          cond_vals="$(jq -cn --arg now "${now_epoch}" '{":now":{N:$now}}')"
+          deadline_epoch=$(( $(date +%s) + LOCK_WAIT_TIMEOUT_SECONDS ))
+          attempt=0
+          while true; do
+            now_epoch="$(date +%s)"
+            if (( now_epoch >= deadline_epoch )); then
+              echo "Timed out waiting for global lock after ${LOCK_WAIT_TIMEOUT_SECONDS}s." >&2
+              exit 1
+            fi
 
-          aws dynamodb put-item \
-            --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
-            --item "${item}" \
-            --condition-expression "attribute_not_exists(lock_name) OR expires_at < :now" \
-            --expression-attribute-values "${cond_vals}" >/dev/null
+            expires_epoch=$((now_epoch + LOCK_LEASE_SECONDS))
+            acquired_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            item="$(jq -cn \
+              --arg lock_name "${SCFUZZBENCH_LOCK_NAME}" \
+              --arg owner_run_id "${RUN_ID}" \
+              --arg acquired_at "${acquired_at}" \
+              --arg expires_at "${expires_epoch}" \
+              --arg workflow_run_id "${GITHUB_RUN_ID}" \
+              '{lock_name:{S:$lock_name},owner_run_id:{S:$owner_run_id},acquired_at:{S:$acquired_at},expires_at:{N:$expires_at},workflow_run_id:{S:$workflow_run_id},updated_at:{S:$acquired_at}}')"
+            cond_vals="$(jq -cn --arg now "${now_epoch}" '{":now":{N:$now}}')"
 
-          echo "lock_acquired=true" >> "${GITHUB_OUTPUT}"
+            if aws dynamodb put-item \
+              --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
+              --item "${item}" \
+              --condition-expression "attribute_not_exists(lock_name) OR expires_at < :now" \
+              --expression-attribute-values "${cond_vals}" >/dev/null 2>&1; then
+              {
+                echo "lock_acquired=true"
+                echo "lock_lease_seconds=${LOCK_LEASE_SECONDS}"
+                echo "lock_attempts=$((attempt + 1))"
+              } >> "${GITHUB_OUTPUT}"
+              break
+            fi
+
+            attempt=$((attempt + 1))
+            holder_json="$(aws dynamodb get-item \
+              --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
+              --key "$(jq -cn --arg lock_name "${SCFUZZBENCH_LOCK_NAME}" '{lock_name:{S:$lock_name}}')" \
+              --consistent-read \
+              --output json 2>/dev/null || true)"
+            holder_run_id="$(jq -r '.Item.owner_run_id.S // "unknown"' <<<"${holder_json}")"
+            holder_expires_raw="$(jq -r '.Item.expires_at.N // "0"' <<<"${holder_json}")"
+            holder_remaining="unknown"
+            if [[ "${holder_expires_raw}" =~ ^[0-9]+$ ]]; then
+              rem=$((holder_expires_raw - now_epoch))
+              if (( rem < 0 )); then
+                rem=0
+              fi
+              holder_remaining="${rem}s"
+            fi
+
+            delay=$((2 ** (attempt - 1)))
+            if (( delay > LOCK_MAX_BACKOFF_SECONDS )); then
+              delay="${LOCK_MAX_BACKOFF_SECONDS}"
+            fi
+            jitter=$((RANDOM % 6))
+            delay=$((delay + jitter))
+            if (( delay > LOCK_MAX_BACKOFF_SECONDS )); then
+              delay="${LOCK_MAX_BACKOFF_SECONDS}"
+            fi
+            if (( delay < 5 )); then
+              delay=5
+            fi
+
+            echo "Global lock busy (owner_run_id=${holder_run_id}, remaining=${holder_remaining}); retrying in ${delay}s (attempt ${attempt})."
+            sleep "${delay}"
+          done
 
       - name: Terraform apply
         id: apply
@@ -565,13 +624,43 @@ jobs:
           GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
           PROPERTIES_PATH: ${{ inputs.properties_path }}
+          LOCK_LEASE_SECONDS: ${{ steps.lock.outputs.lock_lease_seconds || env.SCFUZZBENCH_LOCK_LEASE_SECONDS }}
+          LOCK_HEARTBEAT_SECONDS: "120"
+          TF_APPLY_MAX_ATTEMPTS: ${{ env.TF_APPLY_MAX_ATTEMPTS }}
+          TF_APPLY_BASE_BACKOFF_SECONDS: ${{ env.TF_APPLY_BASE_BACKOFF_SECONDS }}
+          TF_APPLY_MAX_BACKOFF_SECONDS: ${{ env.TF_APPLY_MAX_BACKOFF_SECONDS }}
         run: |
           set -euo pipefail
           fuzzers="${FUZZERS_JSON:-}"
           if [[ -z "${fuzzers}" ]]; then
             fuzzers='["echidna","medusa","foundry"]'
           fi
-          tf_args=(
+          if ! [[ "${MAX_PARALLEL_EFFECTIVE}" =~ ^[0-9]+$ ]] || (( MAX_PARALLEL_EFFECTIVE < 1 )); then
+            echo "Invalid MAX_PARALLEL_EFFECTIVE: ${MAX_PARALLEL_EFFECTIVE}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_LEASE_SECONDS < 300 )); then
+            echo "Invalid LOCK_LEASE_SECONDS: ${LOCK_LEASE_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_HEARTBEAT_SECONDS < 30 )); then
+            echo "Invalid LOCK_HEARTBEAT_SECONDS: ${LOCK_HEARTBEAT_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_MAX_ATTEMPTS < 1 )); then
+            echo "Invalid TF_APPLY_MAX_ATTEMPTS: ${TF_APPLY_MAX_ATTEMPTS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_BASE_BACKOFF_SECONDS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_BASE_BACKOFF_SECONDS < 1 )); then
+            echo "Invalid TF_APPLY_BASE_BACKOFF_SECONDS: ${TF_APPLY_BASE_BACKOFF_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_MAX_BACKOFF_SECONDS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_MAX_BACKOFF_SECONDS < TF_APPLY_BASE_BACKOFF_SECONDS )); then
+            echo "Invalid TF_APPLY_MAX_BACKOFF_SECONDS: ${TF_APPLY_MAX_BACKOFF_SECONDS}" >&2
+            exit 1
+          fi
+
+          tf_common_args=(
             -var "aws_region=${AWS_REGION}"
             -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
             -var "target_repo_url=${TARGET_REPO_URL}"
@@ -579,35 +668,36 @@ jobs:
             -var "benchmark_type=${BENCHMARK_TYPE}"
             -var "instance_type=${INSTANCE_TYPE}"
             -var "instances_per_fuzzer=${INSTANCES_PER_FUZZER}"
-            -var "max_parallel_instances=${MAX_PARALLEL_EFFECTIVE}"
             -var "timeout_hours=${TIMEOUT_HOURS}"
             -var "fuzzers=${fuzzers}"
             -var "run_id=${RUN_ID}"
             -var "scfuzzbench_commit=${GITHUB_SHA}"
             -var "control_lock_table_name=${SCFUZZBENCH_LOCK_TABLE}"
             -var "control_lock_name=${SCFUZZBENCH_LOCK_NAME}"
+            -var "control_lock_lease_seconds=${LOCK_LEASE_SECONDS}"
+            -var "control_lock_heartbeat_seconds=${LOCK_HEARTBEAT_SECONDS}"
           )
 
           if [[ -n "${FOUNDRY_VERSION}" ]]; then
-            tf_args+=(-var "foundry_version=${FOUNDRY_VERSION}")
+            tf_common_args+=(-var "foundry_version=${FOUNDRY_VERSION}")
           fi
           if [[ -n "${FOUNDRY_GIT_REPO}" ]]; then
-            tf_args+=(-var "foundry_git_repo=${FOUNDRY_GIT_REPO}")
+            tf_common_args+=(-var "foundry_git_repo=${FOUNDRY_GIT_REPO}")
           fi
           if [[ -n "${FOUNDRY_GIT_REF}" ]]; then
-            tf_args+=(-var "foundry_git_ref=${FOUNDRY_GIT_REF}")
+            tf_common_args+=(-var "foundry_git_ref=${FOUNDRY_GIT_REF}")
           fi
           if [[ -n "${ECHIDNA_VERSION}" ]]; then
-            tf_args+=(-var "echidna_version=${ECHIDNA_VERSION}")
+            tf_common_args+=(-var "echidna_version=${ECHIDNA_VERSION}")
           fi
           if [[ -n "${MEDUSA_VERSION}" ]]; then
-            tf_args+=(-var "medusa_version=${MEDUSA_VERSION}")
+            tf_common_args+=(-var "medusa_version=${MEDUSA_VERSION}")
           fi
           if [[ -n "${BITWUZLA_VERSION}" ]]; then
-            tf_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
+            tf_common_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
           fi
           if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
-            tf_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")
+            tf_common_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")
           fi
 
           if [[ -n "${FUZZER_ENV_JSON}" || -n "${PROPERTIES_PATH}" ]]; then
@@ -625,10 +715,58 @@ jobs:
           print(json.dumps(data))
           PY
             )
-            tf_args+=(-var "fuzzer_env=${merged}")
+            tf_common_args+=(-var "fuzzer_env=${merged}")
           fi
 
-          terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}"
+          current_parallel="${MAX_PARALLEL_EFFECTIVE}"
+          apply_attempt=1
+          while true; do
+            tf_args=("${tf_common_args[@]}" -var "max_parallel_instances=${current_parallel}")
+            echo "Terraform apply attempt ${apply_attempt}/${TF_APPLY_MAX_ATTEMPTS} with max_parallel_instances=${current_parallel}"
+            set +e
+            terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}" 2>&1 | tee terraform-apply.log
+            rc=${PIPESTATUS[0]}
+            set -e
+
+            if (( rc == 0 )); then
+              {
+                echo "applied_parallel=${current_parallel}"
+                echo "apply_attempts=${apply_attempt}"
+              } >> "${GITHUB_OUTPUT}"
+              break
+            fi
+
+            if (( apply_attempt >= TF_APPLY_MAX_ATTEMPTS )); then
+              echo "Terraform apply failed after ${apply_attempt} attempt(s)." >&2
+              exit "${rc}"
+            fi
+
+            if ! grep -Eiq "(InsufficientInstanceCapacity|VcpuLimitExceeded|RequestLimitExceeded|ServiceUnavailable|Unavailable|InternalError|InsufficientFreeAddressesInSubnet|capacity)" terraform-apply.log; then
+              echo "Terraform apply failed with a non-retryable error." >&2
+              exit "${rc}"
+            fi
+
+            next_parallel="${current_parallel}"
+            if (( current_parallel > 1 )); then
+              next_parallel=$((current_parallel - 1))
+            fi
+
+            exponent=$((apply_attempt - 1))
+            raw_delay=$((TF_APPLY_BASE_BACKOFF_SECONDS * (2 ** exponent)))
+            if (( raw_delay > TF_APPLY_MAX_BACKOFF_SECONDS )); then
+              raw_delay=${TF_APPLY_MAX_BACKOFF_SECONDS}
+            fi
+            jitter=$((RANDOM % (TF_APPLY_BASE_BACKOFF_SECONDS + 1)))
+            delay=$((raw_delay + jitter))
+            if (( delay > TF_APPLY_MAX_BACKOFF_SECONDS )); then
+              delay=${TF_APPLY_MAX_BACKOFF_SECONDS}
+            fi
+
+            echo "Capacity/transient apply failure detected. Retrying in ${delay}s with max_parallel_instances=${next_parallel}."
+            current_parallel="${next_parallel}"
+            apply_attempt=$((apply_attempt + 1))
+            sleep "${delay}"
+          done
 
       - name: Collect Terraform outputs
         id: tf_outputs
@@ -681,11 +819,17 @@ jobs:
 
       - name: Summary
         run: |
+          applied_parallel="${{ steps.apply.outputs.applied_parallel }}"
+          if [[ -z "${applied_parallel}" ]]; then
+            applied_parallel="${{ steps.shard_plan.outputs.effective_parallel }}"
+          fi
           {
             echo "Benchmark run started."
             echo ""
             echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
             echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
             echo "- Requested shards: ${{ steps.shard_plan.outputs.requested_shards }}"
-            echo "- Effective parallel workers: ${{ steps.shard_plan.outputs.effective_parallel }}"
+            echo "- Effective parallel workers (applied): ${applied_parallel}"
+            echo "- Terraform apply attempts: ${{ steps.apply.outputs.apply_attempts }}"
+            echo "- Global lock acquisition attempts: ${{ steps.lock.outputs.lock_attempts }}"
           } >> "${GITHUB_STEP_SUMMARY}"

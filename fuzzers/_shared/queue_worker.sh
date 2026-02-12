@@ -20,6 +20,8 @@ SCFUZZBENCH_SHARD_RETRY_BASE_SECONDS=${SCFUZZBENCH_SHARD_RETRY_BASE_SECONDS:-30}
 SCFUZZBENCH_SHARD_RETRY_MAX_SECONDS=${SCFUZZBENCH_SHARD_RETRY_MAX_SECONDS:-300}
 SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS=${SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS:-600}
 SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS=${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS:-300}
+SCFUZZBENCH_LOCK_LEASE_SECONDS=${SCFUZZBENCH_LOCK_LEASE_SECONDS:-7200}
+SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS=${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS:-120}
 
 if ! [[ "${SCFUZZBENCH_QUEUE_WAIT_SECONDS}" =~ ^[0-9]+$ ]]; then
   SCFUZZBENCH_QUEUE_WAIT_SECONDS=20
@@ -44,6 +46,12 @@ if ! [[ "${SCFUZZBENCH_VISIBILITY_EXTENSION_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SC
 fi
 if ! [[ "${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS}" -lt 30 ]]; then
   SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS=300
+fi
+if ! [[ "${SCFUZZBENCH_LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_LOCK_LEASE_SECONDS}" -lt 300 ]]; then
+  SCFUZZBENCH_LOCK_LEASE_SECONDS=7200
+fi
+if ! [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" -lt 30 ]]; then
+  SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS=120
 fi
 
 RUN_PK="RUN#${SCFUZZBENCH_RUN_ID}#${SCFUZZBENCH_BENCHMARK_UUID}"
@@ -87,62 +95,255 @@ run_meta_status() {
   jq -r '.Item.status.S // "unknown"' <<<"${meta_json}"
 }
 
-put_shard_state() {
+delete_message_safe() {
+  local receipt_handle=$1
+  aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
+}
+
+get_shard_status() {
+  local shard_key=$1
+  local item
+  item=$(aws_cli dynamodb get-item \
+    --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
+    --key "$(shard_key_json "${shard_key}")" \
+    --consistent-read \
+    --output json 2>/dev/null || true)
+  jq -r '.Item.status.S // "missing"' <<<"${item}"
+}
+
+handle_unclaimable_message() {
+  local shard_key=$1
+  local receipt_handle=$2
+  local context=$3
+  local current_status
+  current_status=$(get_shard_status "${shard_key}")
+
+  case "${current_status}" in
+    succeeded|failed|timed_out)
+      log "${context}: shard '${shard_key}' already terminal (${current_status}); deleting duplicate message."
+      delete_message_safe "${receipt_handle}"
+      mark_run_completed_if_possible || true
+      ;;
+    running)
+      log "${context}: shard '${shard_key}' is still running; keeping message for retry."
+      aws_cli sqs change-message-visibility \
+        --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+        --receipt-handle "${receipt_handle}" \
+        --visibility-timeout 30 \
+        >/dev/null || true
+      ;;
+    queued|retrying|launching)
+      log "${context}: shard '${shard_key}' currently ${current_status}; retrying message shortly."
+      aws_cli sqs change-message-visibility \
+        --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+        --receipt-handle "${receipt_handle}" \
+        --visibility-timeout 15 \
+        >/dev/null || true
+      ;;
+    *)
+      log "${context}: shard '${shard_key}' status is '${current_status}'; keeping message for retry."
+      aws_cli sqs change-message-visibility \
+        --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+        --receipt-handle "${receipt_handle}" \
+        --visibility-timeout 30 \
+        >/dev/null || true
+      ;;
+  esac
+}
+
+claim_shard_for_processing() {
   local shard_key=$1
   local fuzzer_key=$2
   local run_index=$3
-  local status=$4
-  local attempts=$5
-  local exit_code=$6
-  local error_message=$7
+  local attempts=$4
   local now
   now=$(date -Is)
 
-  local item
-  item=$(jq -cn \
-    --arg pk "${RUN_PK}" \
-    --arg sk "SHARD#${shard_key}" \
-    --arg shard_key "${shard_key}" \
+  local names
+  local values
+  names=$(jq -cn '{"#status":"status"}')
+  values=$(jq -cn \
+    --arg queued "queued" \
+    --arg retrying "retrying" \
+    --arg launching "launching" \
+    --arg running "running" \
     --arg fuzzer_key "${fuzzer_key}" \
     --arg run_index "${run_index}" \
-    --arg status "${status}" \
     --arg attempts "${attempts}" \
     --arg instance_id "${SCFUZZBENCH_INSTANCE_ID:-unknown}" \
-    --arg updated_at "${now}" \
+    --arg now "${now}" \
+    '{
+      ":queued":{S:$queued},
+      ":retrying":{S:$retrying},
+      ":launching":{S:$launching},
+      ":running":{S:$running},
+      ":fuzzer_key":{S:$fuzzer_key},
+      ":run_index":{N:$run_index},
+      ":attempts":{N:$attempts},
+      ":instance_id":{S:$instance_id},
+      ":now":{S:$now}
+    }')
+
+  local output
+  local rc
+  set +e
+  output=$(aws_cli dynamodb update-item \
+    --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
+    --key "$(shard_key_json "${shard_key}")" \
+    --condition-expression "#status = :queued OR #status = :retrying OR #status = :launching" \
+    --update-expression "SET #status = :running, fuzzer_key = :fuzzer_key, run_index = :run_index, attempts = :attempts, instance_id = :instance_id, updated_at = :now" \
+    --expression-attribute-names "${names}" \
+    --expression-attribute-values "${values}" \
+    --output json 2>&1)
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if grep -q "ConditionalCheckFailedException" <<<"${output}"; then
+    return 1
+  fi
+  log "Failed to claim shard '${shard_key}': ${output}"
+  return 2
+}
+
+mark_shard_retrying() {
+  local shard_key=$1
+  local fuzzer_key=$2
+  local run_index=$3
+  local attempts=$4
+  local exit_code=$5
+  local error_message=$6
+  local now
+  now=$(date -Is)
+
+  local names
+  local values
+  names=$(jq -cn '{"#status":"status"}')
+  values=$(jq -cn \
+    --arg running "running" \
+    --arg retrying "retrying" \
+    --arg fuzzer_key "${fuzzer_key}" \
+    --arg run_index "${run_index}" \
+    --arg attempts "${attempts}" \
+    --arg instance_id "${SCFUZZBENCH_INSTANCE_ID:-unknown}" \
+    --arg now "${now}" \
     --arg exit_code "${exit_code}" \
     --arg error_message "${error_message}" \
     '{
-      pk:{S:$pk},
-      sk:{S:$sk},
-      entity_type:{S:"shard"},
-      shard_key:{S:$shard_key},
-      fuzzer_key:{S:$fuzzer_key},
-      run_index:{N:$run_index},
-      status:{S:$status},
-      attempts:{N:$attempts},
-      instance_id:{S:$instance_id},
-      updated_at:{S:$updated_at}
-    }
-    + (if $exit_code != "" then {last_exit_code:{N:$exit_code}} else {} end)
-    + (if $error_message != "" then {last_error:{S:$error_message}} else {} end)
-    ')
+      ":running":{S:$running},
+      ":retrying":{S:$retrying},
+      ":fuzzer_key":{S:$fuzzer_key},
+      ":run_index":{N:$run_index},
+      ":attempts":{N:$attempts},
+      ":instance_id":{S:$instance_id},
+      ":now":{S:$now},
+      ":exit_code":{N:$exit_code},
+      ":error_message":{S:$error_message}
+    }')
 
-  aws_cli dynamodb put-item \
+  local output
+  local rc
+  set +e
+  output=$(aws_cli dynamodb update-item \
     --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
-    --item "${item}" \
-    >/dev/null
+    --key "$(shard_key_json "${shard_key}")" \
+    --condition-expression "#status = :running" \
+    --update-expression "SET #status = :retrying, fuzzer_key = :fuzzer_key, run_index = :run_index, attempts = :attempts, instance_id = :instance_id, updated_at = :now, last_exit_code = :exit_code, last_error = :error_message" \
+    --expression-attribute-names "${names}" \
+    --expression-attribute-values "${values}" \
+    --output json 2>&1)
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if grep -q "ConditionalCheckFailedException" <<<"${output}"; then
+    return 1
+  fi
+  log "Failed to transition shard '${shard_key}' to retrying: ${output}"
+  return 2
 }
 
-add_run_counter() {
-  local field=$1
-  local values
-  values=$(jq -cn --arg now "$(date -Is)" '{":one":{N:"1"},":now":{S:$now}}')
-  aws_cli dynamodb update-item \
-    --table-name "${SCFUZZBENCH_RUN_STATE_TABLE}" \
-    --key "$(meta_key_json)" \
-    --update-expression "ADD ${field} :one SET updated_at = :now" \
-    --expression-attribute-values "${values}" \
-    >/dev/null
+complete_shard_and_increment_counter() {
+  local shard_key=$1
+  local fuzzer_key=$2
+  local run_index=$3
+  local attempts=$4
+  local status=$5
+  local exit_code=$6
+  local error_message=$7
+  local counter_field=$8
+  local now
+  now=$(date -Is)
+
+  local tx_payload
+  tx_payload=$(jq -cn \
+    --arg table "${SCFUZZBENCH_RUN_STATE_TABLE}" \
+    --arg run_pk "${RUN_PK}" \
+    --arg shard_key "${shard_key}" \
+    --arg status "${status}" \
+    --arg running "running" \
+    --arg fuzzer_key "${fuzzer_key}" \
+    --arg run_index "${run_index}" \
+    --arg attempts "${attempts}" \
+    --arg instance_id "${SCFUZZBENCH_INSTANCE_ID:-unknown}" \
+    --arg now "${now}" \
+    --arg exit_code "${exit_code}" \
+    --arg error_message "${error_message}" \
+    --arg counter_field "${counter_field}" \
+    '{
+      TransactItems: [
+        {
+          Update: {
+            TableName: $table,
+            Key: {pk:{S:$run_pk}, sk:{S:("SHARD#" + $shard_key)}},
+            ConditionExpression: "#status = :running",
+            UpdateExpression: "SET #status = :status, fuzzer_key = :fuzzer_key, run_index = :run_index, attempts = :attempts, instance_id = :instance_id, updated_at = :now, last_exit_code = :exit_code, last_error = :error_message",
+            ExpressionAttributeNames: {"#status":"status"},
+            ExpressionAttributeValues: {
+              ":running":{S:$running},
+              ":status":{S:$status},
+              ":fuzzer_key":{S:$fuzzer_key},
+              ":run_index":{N:$run_index},
+              ":attempts":{N:$attempts},
+              ":instance_id":{S:$instance_id},
+              ":now":{S:$now},
+              ":exit_code":{N:$exit_code},
+              ":error_message":{S:$error_message}
+            }
+          }
+        },
+        {
+          Update: {
+            TableName: $table,
+            Key: {pk:{S:$run_pk}, sk:{S:"META"}},
+            UpdateExpression: ("ADD " + $counter_field + " :one SET updated_at = :now"),
+            ExpressionAttributeValues: {
+              ":one":{N:"1"},
+              ":now":{S:$now}
+            }
+          }
+        }
+      ]
+    }')
+
+  local output
+  local rc
+  set +e
+  output=$(aws_cli dynamodb transact-write-items \
+    --transact-items "${tx_payload}" \
+    --output json 2>&1)
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if grep -Eq "ConditionalCheckFailedException|ConditionalCheckFailed" <<<"${output}"; then
+    return 1
+  fi
+  log "Failed to finalize shard '${shard_key}' with status '${status}': ${output}"
+  return 2
 }
 
 set_run_status() {
@@ -181,6 +382,69 @@ release_global_lock() {
     >/dev/null || true
 }
 
+extend_global_lock_lease() {
+  local now_epoch
+  now_epoch=$(date +%s)
+  local expires_at=$((now_epoch + SCFUZZBENCH_LOCK_LEASE_SECONDS))
+  local values
+  values=$(jq -cn \
+    --arg owner "${SCFUZZBENCH_RUN_ID}" \
+    --arg expires_at "${expires_at}" \
+    --arg now "$(date -Is)" \
+    '{":owner":{S:$owner},":expires_at":{N:$expires_at},":now":{S:$now}}')
+  local key
+  key=$(jq -cn --arg name "${SCFUZZBENCH_LOCK_NAME}" '{lock_name:{S:$name}}')
+  aws_cli dynamodb update-item \
+    --table-name "${SCFUZZBENCH_LOCK_TABLE}" \
+    --key "${key}" \
+    --condition-expression "owner_run_id = :owner" \
+    --update-expression "SET expires_at = :expires_at, updated_at = :now" \
+    --expression-attribute-values "${values}" \
+    >/dev/null
+}
+
+heartbeat_lock_lease() {
+  while true; do
+    sleep "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" || true
+    extend_global_lock_lease >/dev/null 2>&1 || true
+  done
+}
+
+upload_final_manifest_json() {
+  local status=$1
+  local requested=$2
+  local succeeded=$3
+  local failed=$4
+  local completed_at=$5
+  local tmp_dir="${SCFUZZBENCH_ROOT}/queue-final"
+  local base_manifest="${tmp_dir}/manifest-base.json"
+  local final_manifest="${tmp_dir}/manifest-final.json"
+  mkdir -p "${tmp_dir}"
+
+  if ! aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/manifest.json" "${base_manifest}" --no-progress >/dev/null 2>&1; then
+    if ! aws_cli s3 cp "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/manifest.json" "${base_manifest}" --no-progress >/dev/null 2>&1; then
+      echo '{}' >"${base_manifest}"
+    fi
+  fi
+
+  jq \
+    --arg status "${status}" \
+    --arg requested "${requested}" \
+    --arg succeeded "${succeeded}" \
+    --arg failed "${failed}" \
+    --arg completed_at "${completed_at}" \
+    '. + {
+      final_status: $status,
+      final_requested_shards: ($requested|tonumber),
+      final_succeeded_shards: ($succeeded|tonumber),
+      final_failed_shards: ($failed|tonumber),
+      completed_at: $completed_at
+    }' "${base_manifest}" >"${final_manifest}"
+
+  retry_cmd 5 30 aws_cli s3 cp "${final_manifest}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/manifest.json" --no-progress
+  retry_cmd 5 30 aws_cli s3 cp "${final_manifest}" "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/manifest.json" --no-progress
+}
+
 upload_run_status_json() {
   local status=$1
   local meta
@@ -190,17 +454,19 @@ upload_run_status_json() {
   local succeeded
   local failed
   local max_parallel
+  local completed_at
   requested=$(run_meta_num "${meta}" "requested_shards" 0)
   succeeded=$(run_meta_num "${meta}" "succeeded_count" 0)
   failed=$(run_meta_num "${meta}" "failed_count" 0)
   max_parallel=$(run_meta_num "${meta}" "max_parallel_effective" 0)
+  completed_at=$(date -Is)
 
   local status_file="${SCFUZZBENCH_ROOT}/run-status.json"
   jq -cn \
     --arg status "${status}" \
     --arg run_id "${SCFUZZBENCH_RUN_ID}" \
     --arg benchmark_uuid "${SCFUZZBENCH_BENCHMARK_UUID}" \
-    --arg completed_at "$(date -Is)" \
+    --arg completed_at "${completed_at}" \
     --arg requested "${requested}" \
     --arg succeeded "${succeeded}" \
     --arg failed "${failed}" \
@@ -218,6 +484,7 @@ upload_run_status_json() {
 
   retry_cmd 5 30 aws_cli s3 cp "${status_file}" "s3://${SCFUZZBENCH_S3_BUCKET}/logs/${STATUS_PREFIX}/status.json" --no-progress
   retry_cmd 5 30 aws_cli s3 cp "${status_file}" "s3://${SCFUZZBENCH_S3_BUCKET}/runs/${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}/status.json" --no-progress
+  upload_final_manifest_json "${status}" "${requested}" "${succeeded}" "${failed}" "${completed_at}"
 }
 
 queue_counts() {
@@ -334,22 +601,48 @@ run_shard() {
 
   if [[ -z "${shard_key}" || -z "${fuzzer_key}" || -z "${run_index}" ]]; then
     log "Invalid shard message body: ${body}"
-    aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
+    delete_message_safe "${receipt_handle}"
     return 0
   fi
   if ! [[ "${run_index}" =~ ^[0-9]+$ ]]; then
     log "Invalid run_index in shard message: ${body}"
-    aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
+    delete_message_safe "${receipt_handle}"
     return 0
   fi
 
-  put_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "running" "${receive_count}" "" ""
+  local claim_rc=0
+  if ! claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}"; then
+    claim_rc=$?
+    if (( claim_rc == 1 )); then
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "claim"
+      return 0
+    fi
+    log "Failed to claim shard '${shard_key}' due to transient error; keeping message for retry."
+    aws_cli sqs change-message-visibility \
+      --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+      --receipt-handle "${receipt_handle}" \
+      --visibility-timeout 30 \
+      >/dev/null || true
+    return 0
+  fi
 
   if ! ensure_fuzzer_installed "${fuzzer_key}"; then
-    put_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "failed" "${receive_count}" "200" "install_failed"
-    add_run_counter "failed_count"
-    aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
-    mark_run_completed_if_possible || true
+    local install_finalize_rc=0
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "failed" "200" "install_failed" "failed_count"; then
+      delete_message_safe "${receipt_handle}"
+      mark_run_completed_if_possible || true
+      return 0
+    fi
+    install_finalize_rc=$?
+    if (( install_finalize_rc == 1 )); then
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure finalize"
+      return 0
+    fi
+    aws_cli sqs change-message-visibility \
+      --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+      --receipt-handle "${receipt_handle}" \
+      --visibility-timeout 30 \
+      >/dev/null || true
     return 0
   fi
 
@@ -384,10 +677,22 @@ run_shard() {
   rm -rf "${shard_root}" || true
 
   if [[ "${exit_code}" -eq 0 ]]; then
-    put_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "succeeded" "${receive_count}" "0" ""
-    add_run_counter "succeeded_count"
-    aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
-    mark_run_completed_if_possible || true
+    local success_finalize_rc=0
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "succeeded" "0" "" "succeeded_count"; then
+      delete_message_safe "${receipt_handle}"
+      mark_run_completed_if_possible || true
+      return 0
+    fi
+    success_finalize_rc=$?
+    if (( success_finalize_rc == 1 )); then
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "success finalize"
+      return 0
+    fi
+    aws_cli sqs change-message-visibility \
+      --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+      --receipt-handle "${receipt_handle}" \
+      --visibility-timeout 30 \
+      >/dev/null || true
     return 0
   fi
 
@@ -397,28 +702,65 @@ run_shard() {
   fi
 
   if (( receive_count >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
-    put_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "${failure_status}" "${receive_count}" "${exit_code}" "terminal"
-    add_run_counter "failed_count"
-    if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
-      aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
+    local terminal_finalize_rc=0
+    if complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
+      if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
+        aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
+      fi
+      delete_message_safe "${receipt_handle}"
+      mark_run_completed_if_possible || true
+      return 0
     fi
-    aws_cli sqs delete-message --queue-url "${SCFUZZBENCH_QUEUE_URL}" --receipt-handle "${receipt_handle}" >/dev/null || true
-    mark_run_completed_if_possible || true
+    terminal_finalize_rc=$?
+    if (( terminal_finalize_rc == 1 )); then
+      handle_unclaimable_message "${shard_key}" "${receipt_handle}" "terminal finalize"
+      return 0
+    fi
+    aws_cli sqs change-message-visibility \
+      --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+      --receipt-handle "${receipt_handle}" \
+      --visibility-timeout 30 \
+      >/dev/null || true
     return 0
   fi
 
   local delay
   delay=$(backoff_seconds "${receive_count}")
-  put_shard_state "${shard_key}" "${fuzzer_key}" "${run_index}" "retrying" "${receive_count}" "${exit_code}" "retry_in_${delay}s"
+  local retry_rc=0
+  if mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${receive_count}" "${exit_code}" "retry_in_${delay}s"; then
+    aws_cli sqs change-message-visibility \
+      --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
+      --receipt-handle "${receipt_handle}" \
+      --visibility-timeout "${delay}" \
+      >/dev/null || true
+    return 0
+  fi
+  retry_rc=$?
+  if (( retry_rc == 1 )); then
+    handle_unclaimable_message "${shard_key}" "${receipt_handle}" "retry transition"
+    return 0
+  fi
   aws_cli sqs change-message-visibility \
     --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
     --receipt-handle "${receipt_handle}" \
-    --visibility-timeout "${delay}" \
+    --visibility-timeout 30 \
     >/dev/null || true
   return 0
 }
 
+cleanup_lock_heartbeat() {
+  if [[ -n "${LOCK_HEARTBEAT_PID:-}" ]]; then
+    kill "${LOCK_HEARTBEAT_PID}" >/dev/null 2>&1 || true
+    wait "${LOCK_HEARTBEAT_PID}" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup_lock_heartbeat EXIT
+
 log "Starting queue worker on instance ${SCFUZZBENCH_INSTANCE_ID:-unknown}"
+extend_global_lock_lease >/dev/null 2>&1 || true
+heartbeat_lock_lease &
+LOCK_HEARTBEAT_PID=$!
 
 idle_polls=0
 while true; do

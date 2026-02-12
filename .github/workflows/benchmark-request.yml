@@ -560,12 +560,12 @@ jobs:
                 "- Run ID: `" + run_id + "`",
                 "- Benchmark UUID: `" + benchmark_uuid + "`",
                 "",
-                "Docs:",
-                `- ${docsUrl}`,
-                "",
-                "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
-              ].join("\n")
-            );
+                  "Docs:",
+                  `- ${docsUrl}`,
+                  "",
+                  "_Note: the docs site only shows **complete** runs (queue-mode uses status.json terminal state; legacy runs use timeout + 1h grace)._",
+                ].join("\n")
+              );
 
             await setStatusLabel(LABEL_RUNNING);
             await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });

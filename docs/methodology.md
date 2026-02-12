@@ -39,6 +39,10 @@ Terraform computes two IDs used across the pipeline:
 - `benchmark_type`, `instance_type`, `instances_per_fuzzer`, `timeout_hours`
 - `aws_region`, `ubuntu_ami_id`
 - tool versions and selected `fuzzer_keys`
+- queue/mutex settings (`requested_shards`, `max_parallel`, retry policy, lock lease/heartbeat)
+
+At terminal completion, queue workers update manifest fields with final shard counters
+(`final_requested_shards`, `final_succeeded_shards`, `final_failed_shards`).
 
 This means changing any of those manifest fields changes `benchmark_uuid`.
 
@@ -58,6 +62,7 @@ Terraform provisions queue-backed execution resources:
 Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/_shared/common.sh`:
 
 - Queue init seeds one message per `(fuzzer, run_index)` shard.
+- Shard lifecycle in run-state table is explicit: `launching -> queued -> running -> (succeeded|failed|timed_out)` with `retrying` on retry backoff.
 - Worker polls queue, receives one shard, installs that shard's fuzzer if needed, and runs it.
 - Clone target repository and checkout pinned commit, then build with `forge build`.
 - Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).

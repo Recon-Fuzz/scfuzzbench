@@ -179,6 +179,18 @@ variable "control_lock_name" {
   default     = "benchmark-global-lock"
 }
 
+variable "control_lock_lease_seconds" {
+  type        = number
+  description = "Lease duration for the global run lock. Queue workers renew this lease while the run is active."
+  default     = 7200
+}
+
+variable "control_lock_heartbeat_seconds" {
+  type        = number
+  description = "Heartbeat interval used by queue workers to extend the global run lock lease."
+  default     = 120
+}
+
 variable "queue_wait_seconds" {
   type        = number
   description = "SQS long-poll wait time for queue workers."

@@ -229,6 +229,8 @@ Two workflows publish runs and releases directly from CI/CD:
   - Dispatch with inputs for repo/commit, benchmark type, instance type/count, and timeout hours.
   - Uses existing bucket from `SCFUZZBENCH_BUCKET` and region from `AWS_REGION`.
   - Enforces a **global mutex** (`benchmark-global-lock`): only one benchmark run is active at a time.
+  - New run requests wait with backoff until the active lock holder completes or the lock expires.
+  - Queue workers renew the lock lease while shards are still being processed.
   - Auto-discovers an effective parallel worker cap from EC2 quota signals when available.
   - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
     `TF_BACKEND_CONFIG` (for remote state).
