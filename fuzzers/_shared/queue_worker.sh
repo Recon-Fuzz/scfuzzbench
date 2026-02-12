@@ -222,7 +222,8 @@ handle_unclaimable_message() {
         fi
         if [[ -n "${current_fuzzer_key}" && "${current_run_index}" =~ ^[0-9]+$ ]]; then
           local reclaim_rc=0
-          if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${current_fuzzer_key}" "${current_run_index}" "${current_attempts}" "903" "stale_running_reclaim_age_${age_seconds}s"; then
+          retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${current_fuzzer_key}" "${current_run_index}" "${current_attempts}" "903" "stale_running_reclaim_age_${age_seconds}s" || reclaim_rc=$?
+          if (( reclaim_rc == 0 )); then
             local reclaim_delay
             reclaim_delay=$(backoff_seconds "${current_attempts}")
             log "${context}: reclaimed stale running shard '${shard_key}' (age=${age_seconds}s); retrying in ${reclaim_delay}s."
@@ -233,7 +234,6 @@ handle_unclaimable_message() {
               >/dev/null || true
             return
           fi
-          reclaim_rc=$?
           if (( reclaim_rc == 1 )); then
             log "${context}: shard '${shard_key}' running reclaim raced with another transition; retrying shortly."
             aws_cli sqs change-message-visibility \
@@ -769,12 +769,10 @@ mark_run_completed_if_possible() {
   fi
 
   local status_rc=0
-  if ! set_run_status "completed"; then
-    status_rc=$?
-    if (( status_rc > 1 )); then
-      log "Failed to persist terminal run-state status after publishing status.json."
-      return 1
-    fi
+  set_run_status "completed" || status_rc=$?
+  if (( status_rc > 1 )); then
+    log "Failed to persist terminal run-state status after publishing status.json."
+    return 1
   fi
 
   log "Run completed: succeeded=${succeeded}, failed=${failed}, requested=${requested}"
@@ -807,8 +805,8 @@ run_shard() {
 
   local claimed_attempt=""
   local claim_rc=0
-  if ! claimed_attempt=$(claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}"); then
-    claim_rc=$?
+  claimed_attempt=$(claim_shard_for_processing "${shard_key}" "${fuzzer_key}" "${run_index}") || claim_rc=$?
+  if (( claim_rc != 0 )); then
     if (( claim_rc == 1 )); then
       handle_unclaimable_message "${shard_key}" "${receipt_handle}" "claim" "${fuzzer_key}" "${run_index}"
       return 0
@@ -831,7 +829,8 @@ run_shard() {
     local install_exit_code=200
     if (( claimed_attempt >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
       local install_terminal_rc=0
-      if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "failed" "${install_exit_code}" "install_failed_terminal" "failed_count"; then
+      retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "failed" "${install_exit_code}" "install_failed_terminal" "failed_count" || install_terminal_rc=$?
+      if (( install_terminal_rc == 0 )); then
         if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
           aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
         fi
@@ -839,7 +838,6 @@ run_shard() {
         mark_run_completed_if_possible || true
         return 0
       fi
-      install_terminal_rc=$?
       if (( install_terminal_rc == 1 )); then
         handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure terminal finalize" "${fuzzer_key}" "${run_index}"
         return 0
@@ -855,7 +853,8 @@ run_shard() {
     local install_delay
     install_delay=$(backoff_seconds "${claimed_attempt}")
     local install_retry_rc=0
-    if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${install_exit_code}" "install_failed_retry_in_${install_delay}s"; then
+    retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${install_exit_code}" "install_failed_retry_in_${install_delay}s" || install_retry_rc=$?
+    if (( install_retry_rc == 0 )); then
       aws_cli sqs change-message-visibility \
         --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
         --receipt-handle "${receipt_handle}" \
@@ -863,7 +862,6 @@ run_shard() {
         >/dev/null || true
       return 0
     fi
-    install_retry_rc=$?
     if (( install_retry_rc == 1 )); then
       handle_unclaimable_message "${shard_key}" "${receipt_handle}" "install-failure retry transition" "${fuzzer_key}" "${run_index}"
       return 0
@@ -912,12 +910,12 @@ run_shard() {
 
   if [[ "${exit_code}" -eq 0 ]]; then
     local success_finalize_rc=0
-    if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "succeeded" "0" "" "succeeded_count"; then
+    retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "succeeded" "0" "" "succeeded_count" || success_finalize_rc=$?
+    if (( success_finalize_rc == 0 )); then
       delete_message_safe "${receipt_handle}"
       mark_run_completed_if_possible || true
       return 0
     fi
-    success_finalize_rc=$?
     if (( success_finalize_rc == 1 )); then
       handle_unclaimable_message "${shard_key}" "${receipt_handle}" "success finalize" "${fuzzer_key}" "${run_index}"
       return 0
@@ -937,7 +935,8 @@ run_shard() {
 
   if (( claimed_attempt >= SCFUZZBENCH_SHARD_MAX_ATTEMPTS )); then
     local terminal_finalize_rc=0
-    if retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${failure_status}" "${exit_code}" "terminal" "failed_count"; then
+    retry_shard_transition 4 complete_shard_and_increment_counter "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${failure_status}" "${exit_code}" "terminal" "failed_count" || terminal_finalize_rc=$?
+    if (( terminal_finalize_rc == 0 )); then
       if [[ -n "${SCFUZZBENCH_QUEUE_DLQ_URL:-}" ]]; then
         aws_cli sqs send-message --queue-url "${SCFUZZBENCH_QUEUE_DLQ_URL}" --message-body "${body}" >/dev/null || true
       fi
@@ -945,7 +944,6 @@ run_shard() {
       mark_run_completed_if_possible || true
       return 0
     fi
-    terminal_finalize_rc=$?
     if (( terminal_finalize_rc == 1 )); then
       handle_unclaimable_message "${shard_key}" "${receipt_handle}" "terminal finalize" "${fuzzer_key}" "${run_index}"
       return 0
@@ -961,7 +959,8 @@ run_shard() {
   local delay
   delay=$(backoff_seconds "${claimed_attempt}")
   local retry_rc=0
-  if retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${exit_code}" "retry_in_${delay}s"; then
+  retry_shard_transition 4 mark_shard_retrying "${shard_key}" "${fuzzer_key}" "${run_index}" "${claimed_attempt}" "${exit_code}" "retry_in_${delay}s" || retry_rc=$?
+  if (( retry_rc == 0 )); then
     aws_cli sqs change-message-visibility \
       --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
       --receipt-handle "${receipt_handle}" \
@@ -969,7 +968,6 @@ run_shard() {
       >/dev/null || true
     return 0
   fi
-  retry_rc=$?
   if (( retry_rc == 1 )); then
     handle_unclaimable_message "${shard_key}" "${receipt_handle}" "retry transition" "${fuzzer_key}" "${run_index}"
     return 0
