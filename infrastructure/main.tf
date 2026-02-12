@@ -29,6 +29,7 @@ locals {
       queue_mode                    = true
       requested_shards              = local.requested_shard_count
       max_parallel                  = local.max_parallel_effective
+      queue_max_receive_count       = local.queue_redrive_max_receive_count
       shard_max_attempts            = var.shard_max_attempts
       global_mutex                  = true
       global_lock_lease_seconds     = var.control_lock_lease_seconds
@@ -101,11 +102,12 @@ locals {
       run_sh     = file(fuzzer.run_path)
     }
   }
-  queue_name              = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-queue"
-  queue_dlq_name          = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-dlq"
-  run_state_table_name    = var.run_state_table_name != "" ? var.run_state_table_name : "${local.name_prefix}-run-state-${random_id.suffix.hex}"
-  control_lock_table_arn  = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.control_lock_table_name}"
-  control_lock_name_value = var.control_lock_name
+  queue_name                      = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-queue"
+  queue_dlq_name                  = "${local.name_prefix}-${local.run_id}-${substr(local.benchmark_uuid, 0, 8)}-dlq"
+  queue_redrive_max_receive_count = max(var.queue_max_receive_count, var.shard_max_attempts + 2)
+  run_state_table_name            = var.run_state_table_name != "" ? var.run_state_table_name : "${local.name_prefix}-run-state-${random_id.suffix.hex}"
+  control_lock_table_arn          = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.control_lock_table_name}"
+  control_lock_name_value         = var.control_lock_name
 }
 
 resource "random_id" "suffix" {
@@ -264,7 +266,7 @@ resource "aws_sqs_queue" "shard_queue" {
   receive_wait_time_seconds  = var.queue_wait_seconds
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.shard_dlq.arn
-    maxReceiveCount     = var.shard_max_attempts
+    maxReceiveCount     = local.queue_redrive_max_receive_count
   })
   tags = local.tags
 }

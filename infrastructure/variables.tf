@@ -233,6 +233,12 @@ variable "queue_message_retention_seconds" {
   default     = 1209600
 }
 
+variable "queue_max_receive_count" {
+  type        = number
+  description = "SQS redrive receive-count budget before automatic DLQ move. Kept independent from shard execution attempts."
+  default     = 20
+}
+
 variable "shard_max_attempts" {
   type        = number
   description = "Maximum retry attempts per shard before terminal failure."
