@@ -64,6 +64,7 @@ Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/
 - Queue init seeds one message per `(fuzzer, run_index)` shard.
 - Shard lifecycle in run-state table is explicit: `launching -> queued -> running -> (succeeded|failed|timed_out)` with `retrying` on retry backoff.
 - Worker polls queue, receives one shard, installs that shard's fuzzer if needed, and runs it.
+- Worker lock lease heartbeat is fail-closed: repeated renew failures stop processing to avoid overlapping active runs.
 - Benchmark requests contend on a global lock with exponential backoff.
 - Lock orchestration (table ensure/acquire/release guard/release) is centralized in `scripts/benchmark_lock.py`.
 - Default lock acquire timeout is `0` (unbounded by policy); optional positive timeout values enable explicit fail-fast lock waits.

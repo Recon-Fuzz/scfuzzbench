@@ -23,6 +23,7 @@ SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECONDS=${SCFUZZBENCH_VISIBILITY_HEARTBEAT_SECO
 SCFUZZBENCH_RUNNING_STALE_SECONDS=${SCFUZZBENCH_RUNNING_STALE_SECONDS:-0}
 SCFUZZBENCH_LOCK_LEASE_SECONDS=${SCFUZZBENCH_LOCK_LEASE_SECONDS:-7200}
 SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS=${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS:-120}
+SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES=${SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES:-3}
 
 if ! [[ "${SCFUZZBENCH_QUEUE_WAIT_SECONDS}" =~ ^[0-9]+$ ]]; then
   SCFUZZBENCH_QUEUE_WAIT_SECONDS=20
@@ -60,9 +61,13 @@ fi
 if ! [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" -lt 30 ]]; then
   SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS=120
 fi
+if ! [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES}" =~ ^[0-9]+$ ]] || [[ "${SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES}" -lt 1 ]]; then
+  SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES=3
+fi
 
 RUN_PK="RUN#${SCFUZZBENCH_RUN_ID}#${SCFUZZBENCH_BENCHMARK_UUID}"
 STATUS_PREFIX="${SCFUZZBENCH_RUN_ID}/${SCFUZZBENCH_BENCHMARK_UUID}"
+LOCK_HEARTBEAT_FAILURE_MARKER="${SCFUZZBENCH_ROOT}/lock-heartbeat.failed"
 
 prepare_workspace
 cache_instance_id || true
@@ -576,9 +581,21 @@ extend_global_lock_lease() {
 }
 
 heartbeat_lock_lease() {
+  local failures=0
   while true; do
     sleep "${SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS}" || true
-    extend_global_lock_lease >/dev/null 2>&1 || true
+    if extend_global_lock_lease >/dev/null 2>&1; then
+      failures=0
+      continue
+    fi
+    failures=$((failures + 1))
+    log "Global lock lease heartbeat failed (${failures}/${SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES})."
+    if (( failures >= SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES )); then
+      log "Global lock lease heartbeat exceeded failure budget; failing closed."
+      : >"${LOCK_HEARTBEAT_FAILURE_MARKER}"
+      kill -TERM "${WORKER_PARENT_PID}" >/dev/null 2>&1 || true
+      return 1
+    fi
   done
 }
 
@@ -1025,12 +1042,21 @@ cleanup_lock_heartbeat() {
 trap cleanup_lock_heartbeat EXIT
 
 log "Starting queue worker on instance ${SCFUZZBENCH_INSTANCE_ID:-unknown}"
-extend_global_lock_lease >/dev/null 2>&1 || true
+WORKER_PARENT_PID=$$
+rm -f "${LOCK_HEARTBEAT_FAILURE_MARKER}" || true
+if ! extend_global_lock_lease >/dev/null 2>&1; then
+  log "Failed to extend global lock lease before queue processing; failing closed."
+  exit 1
+fi
 heartbeat_lock_lease &
 LOCK_HEARTBEAT_PID=$!
 
 idle_polls=0
 while true; do
+  if [[ -f "${LOCK_HEARTBEAT_FAILURE_MARKER}" ]]; then
+    log "Detected lock heartbeat failure marker; stopping queue worker."
+    exit 1
+  fi
   message_json=$(aws_cli sqs receive-message \
     --queue-url "${SCFUZZBENCH_QUEUE_URL}" \
     --max-number-of-messages 1 \

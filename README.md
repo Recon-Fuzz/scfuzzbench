@@ -231,6 +231,7 @@ Two workflows publish runs and releases directly from CI/CD:
   - Enforces a **global mutex** (`benchmark-global-lock`): only one benchmark run is active at a time.
   - New run requests wait with backoff until the active lock holder completes or the lock expires.
   - Queue workers renew the lock lease while shards are still being processed.
+  - If lock renew fails repeatedly, workers fail closed and stop shard processing to avoid overlap with future runs.
   - Lock orchestration is centralized in `scripts/benchmark_lock.py` (table ensure/acquire/release-guard/release).
   - `SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS=0` (default) means lock waiting does not time out by policy. Set it to `>0` for explicit fail-fast behavior.
   - Lock waiting is still bounded by GitHub Actions job runtime limits.
