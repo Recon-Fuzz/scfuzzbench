@@ -517,6 +517,43 @@ set_run_status() {
   return 2
 }
 
+mark_run_failed_due_to_lock_error() {
+  local reason=${1:-lock_heartbeat_failed}
+  local meta="{}"
+  local meta_rc=0
+  local status="unknown"
+
+  set +e
+  meta=$(get_run_meta 2>/dev/null)
+  meta_rc=$?
+  set -e
+  if (( meta_rc == 0 )); then
+    status=$(run_meta_status "${meta}")
+  else
+    log "Unable to read run metadata while handling ${reason}; proceeding with best-effort terminalization."
+  fi
+
+  if [[ "${status}" == "completed" || "${status}" == "failed" ]]; then
+    return 0
+  fi
+
+  if ! upload_run_status_json "failed"; then
+    log "Failed to publish failed status.json for reason '${reason}'."
+  fi
+
+  local set_rc=0
+  set_run_status "failed" || set_rc=$?
+  if (( set_rc > 1 )); then
+    log "Failed to persist failed run-state status for reason '${reason}'."
+    return 1
+  fi
+
+  if ! release_global_lock; then
+    log "Run marked failed for reason '${reason}', but lock release failed; will rely on lease expiry/recovery."
+  fi
+  return 0
+}
+
 release_global_lock() {
   local values
   values=$(jq -cn --arg owner "${SCFUZZBENCH_RUN_ID}" '{":owner":{S:$owner}}')
@@ -593,6 +630,7 @@ heartbeat_lock_lease() {
     if (( failures >= SCFUZZBENCH_LOCK_HEARTBEAT_MAX_FAILURES )); then
       log "Global lock lease heartbeat exceeded failure budget; failing closed."
       : >"${LOCK_HEARTBEAT_FAILURE_MARKER}"
+      mark_run_failed_due_to_lock_error "lock_heartbeat_failure_budget_exhausted" || true
       kill -TERM "${WORKER_PARENT_PID}" >/dev/null 2>&1 || true
       return 1
     fi
@@ -1046,6 +1084,7 @@ WORKER_PARENT_PID=$$
 rm -f "${LOCK_HEARTBEAT_FAILURE_MARKER}" || true
 if ! extend_global_lock_lease >/dev/null 2>&1; then
   log "Failed to extend global lock lease before queue processing; failing closed."
+  mark_run_failed_due_to_lock_error "initial_lock_lease_extend_failed" || true
   exit 1
 fi
 heartbeat_lock_lease &
