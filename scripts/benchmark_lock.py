@@ -209,6 +209,9 @@ def assess_release_safety(
     elif run_metadata_path.exists():
         safe_to_release = False
         reasons.append("missing queue-init-summary after bootstrap attempt; conservatively keep lock")
+    else:
+        safe_to_release = False
+        reasons.append("missing queue-init-summary and run-metadata after bootstrap attempt; conservatively keep lock")
 
     if run_metadata_path.exists():
         metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
@@ -313,6 +316,52 @@ def release_lock(table_name: str, lock_name: str, owner_run_id: str) -> None:
         time.sleep(delay)
 
 
+def renew_lock(table_name: str, lock_name: str, owner_run_id: str, lease_seconds: int) -> None:
+    if lease_seconds < 300:
+        raise ValueError(f"Invalid lock lease seconds: {lease_seconds}")
+
+    key = {"lock_name": {"S": lock_name}}
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        now_epoch = int(time.time())
+        expires_epoch = now_epoch + lease_seconds
+        values = {
+            ":owner": {"S": owner_run_id},
+            ":expires_at": {"N": str(expires_epoch)},
+            ":now": {"S": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_epoch))},
+        }
+        proc = aws(
+            [
+                "dynamodb",
+                "update-item",
+                "--table-name",
+                table_name,
+                "--key",
+                json.dumps(key, separators=(",", ":")),
+                "--condition-expression",
+                "owner_run_id = :owner",
+                "--update-expression",
+                "SET expires_at = :expires_at, updated_at = :now",
+                "--expression-attribute-values",
+                json.dumps(values, separators=(",", ":")),
+            ],
+            check=False,
+        )
+        if proc.returncode == 0:
+            return
+
+        err_text = (proc.stderr or proc.stdout or "").strip()
+        if _is_conditional_check_failed(err_text):
+            raise AwsError("Lock renew failed: ownership changed or lock no longer exists")
+        if attempt >= max_attempts:
+            raise AwsError(f"Failed to renew lock after {max_attempts} attempts: {err_text}")
+
+        delay = min(5, 2 ** (attempt - 1))
+        delay = max(1, delay + random.randint(0, 2))
+        print(f"Lock renew failed (attempt {attempt}/{max_attempts}): {err_text}; retrying in {delay}s", flush=True)
+        time.sleep(delay)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark global lock orchestration helper")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -337,6 +386,12 @@ def parse_args() -> argparse.Namespace:
     p_release.add_argument("--table-name", required=True)
     p_release.add_argument("--lock-name", required=True)
     p_release.add_argument("--owner-run-id", required=True)
+
+    p_renew = sub.add_parser("renew")
+    p_renew.add_argument("--table-name", required=True)
+    p_renew.add_argument("--lock-name", required=True)
+    p_renew.add_argument("--owner-run-id", required=True)
+    p_renew.add_argument("--lease-seconds", required=True, type=int)
 
     return parser.parse_args()
 
@@ -366,6 +421,9 @@ def main() -> int:
             return 0
         if args.cmd == "release":
             release_lock(args.table_name, args.lock_name, args.owner_run_id)
+            return 0
+        if args.cmd == "renew":
+            renew_lock(args.table_name, args.lock_name, args.owner_run_id, args.lease_seconds)
             return 0
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
