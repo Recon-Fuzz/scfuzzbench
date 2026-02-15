@@ -13,6 +13,8 @@ import sys
 import time
 from dataclasses import dataclass
 
+from run_completion import is_queue_mode_run, is_run_complete, timeout_hours_from_manifest
+
 
 RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
 
@@ -245,9 +247,24 @@ def main() -> int:
             # Skip malformed or missing manifests.
             continue
 
-        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
-        deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
-        if now < deadline:
+        timeout_hours = safe_float(timeout_hours_from_manifest(manifest), 24.0)
+        queue_status = ""
+        if is_queue_mode_run(manifest):
+            status_key = f"runs/{run_id}/{benchmark_uuid}/status.json"
+            try:
+                status_raw = aws_text(["s3", "cp", f"s3://{bucket}/{status_key}", "-"], profile=profile)
+                status_obj = json.loads(status_raw)
+                queue_status = str(status_obj.get("status", "")).strip().lower()
+            except Exception:
+                continue
+
+        if not is_run_complete(
+            manifest,
+            run_id=str(run_id),
+            now_epoch=now,
+            grace_seconds=int(args.grace_seconds),
+            queue_status=queue_status,
+        ):
             continue
 
         analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
@@ -279,7 +296,7 @@ def main() -> int:
         )
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
-    print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
+    print(f"Found {len(complete_runs)} complete runs")
 
     # Clean previously generated run/benchmark subpages.
     rm_tree_children(
@@ -646,12 +663,24 @@ def main() -> int:
         add_kv("timeout_hours", m.get("timeout_hours"))
         add_kv("aws_region", m.get("aws_region"))
         add_kv("ubuntu_ami_id", m.get("ubuntu_ami_id"))
+        add_kv("queue_mode", m.get("queue_mode"))
+        add_kv("requested_shards", m.get("requested_shards"))
+        add_kv("max_parallel", m.get("max_parallel"))
+        add_kv("shard_max_attempts", m.get("shard_max_attempts"))
+        add_kv("global_mutex", m.get("global_mutex"))
+        add_kv("global_lock_lease_seconds", m.get("global_lock_lease_seconds"))
+        add_kv("global_lock_heartbeat_seconds", m.get("global_lock_heartbeat_seconds"))
         add_kv("foundry_version", m.get("foundry_version"))
         add_kv("foundry_git_repo", m.get("foundry_git_repo"))
         add_kv("foundry_git_ref", m.get("foundry_git_ref"))
         add_kv("echidna_version", m.get("echidna_version"))
         add_kv("medusa_version", m.get("medusa_version"))
         add_kv("bitwuzla_version", m.get("bitwuzla_version"))
+        add_kv("final_status", m.get("final_status"))
+        add_kv("final_requested_shards", m.get("final_requested_shards"))
+        add_kv("final_succeeded_shards", m.get("final_succeeded_shards"))
+        add_kv("final_failed_shards", m.get("final_failed_shards"))
+        add_kv("completed_at", m.get("completed_at"))
         if isinstance(m.get("fuzzer_keys"), list):
             lines.append(f"- fuzzer_keys: `{', '.join([str(x) for x in m.get('fuzzer_keys', [])])}`")
         lines.append("")

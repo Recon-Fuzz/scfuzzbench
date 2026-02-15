@@ -11,6 +11,8 @@ SCFUZZBENCH_BENCHMARK_MANIFEST_B64=${SCFUZZBENCH_BENCHMARK_MANIFEST_B64:-}
 SCFUZZBENCH_PROPERTIES_PATH=${SCFUZZBENCH_PROPERTIES_PATH:-}
 SCFUZZBENCH_RUNNER_METRICS=${SCFUZZBENCH_RUNNER_METRICS:-1}
 SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS=${SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS:-5}
+SCFUZZBENCH_QUEUE_MODE=${SCFUZZBENCH_QUEUE_MODE:-0}
+SCFUZZBENCH_ARTIFACT_SUFFIX=${SCFUZZBENCH_ARTIFACT_SUFFIX:-}
 
 SCFUZZBENCH_AWS_CREDS_ENV_FILE=${SCFUZZBENCH_AWS_CREDS_ENV_FILE:-${SCFUZZBENCH_ROOT}/aws_creds.env}
 SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-300}
@@ -18,6 +20,18 @@ SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-3
 log() {
   # Use stderr so command substitutions can safely capture stdout.
   echo "[$(date -Is)] $*" >&2
+}
+
+is_truthy() {
+  local flag="${1:-}"
+  case "${flag}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 retry_cmd() {
@@ -296,6 +310,10 @@ finalize_run() {
     else
       log "Skipping upload in finalize; missing S3 bucket, run id, or fuzzer label."
     fi
+  fi
+  if is_truthy "${SCFUZZBENCH_QUEUE_MODE:-0}"; then
+    log "Queue mode enabled; skipping instance shutdown in finalize."
+    return ${exit_code}
   fi
   shutdown_instance
   return ${exit_code}
@@ -816,6 +834,15 @@ upload_results() {
   cache_instance_id || true
   local instance_id="${SCFUZZBENCH_INSTANCE_ID:-unknown}"
   local base_name="${instance_id}-${SCFUZZBENCH_FUZZER_LABEL}"
+  if [[ -n "${SCFUZZBENCH_ARTIFACT_SUFFIX:-}" ]]; then
+    local safe_suffix
+    safe_suffix=$(echo "${SCFUZZBENCH_ARTIFACT_SUFFIX}" | tr -cs 'A-Za-z0-9._-' '-')
+    safe_suffix="${safe_suffix#-}"
+    safe_suffix="${safe_suffix%-}"
+    if [[ -n "${safe_suffix}" ]]; then
+      base_name="${base_name}-${safe_suffix}"
+    fi
+  fi
   local upload_dir="${SCFUZZBENCH_ROOT}/upload"
   mkdir -p "${upload_dir}"
   local log_zip="${upload_dir}/logs-${base_name}.zip"
