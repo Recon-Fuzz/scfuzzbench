@@ -106,7 +106,7 @@ const issueBody = computed(() => {
     "",
     "This issue was generated from https://scfuzzbench.com/start.",
     "",
-    "A maintainer must change the label from `benchmark/needs-approval` to `benchmark/approved` to start the run.",
+    "A maintainer must apply `benchmark/03-approved` to start the run.",
     "",
     "```json",
     requestJson.value,
@@ -123,7 +123,7 @@ const issueUrl = computed(() => {
   params.set("title", issueTitle.value);
   params.set("body", issueBody.value);
   // These labels must exist in the repo to be pre-applied; the workflow will also ensure them.
-  params.set("labels", "benchmark/needs-approval");
+  params.set("labels", "benchmark/01-pending");
   return `${NEW_ISSUE_URL}?${params.toString()}`;
 });
 

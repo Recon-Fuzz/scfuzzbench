@@ -50,8 +50,7 @@ jobs:
             const LABEL_PENDING = "benchmark/01-pending";
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
-            const LABEL_RUNNING = "benchmark/04-running";
-            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
             const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry"];
 
             function uniq(arr) {
@@ -198,7 +197,6 @@ jobs:
             await ensureLabel(LABEL_PENDING, "dff6dd", "Benchmark request created and pending JSON validation.");
             await ensureLabel(LABEL_VALIDATED, "b7eab2", "Benchmark request JSON validated by bot.");
             await ensureLabel(LABEL_APPROVED, "5ccf58", "Benchmark request approved by maintainer.");
-            await ensureLabel(LABEL_RUNNING, "1f7a1f", "Benchmark request accepted; benchmark run started.");
 
             const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const authorAssociation = String(issue.author_association || "");
@@ -496,8 +494,7 @@ jobs:
             const LABEL_PENDING = "benchmark/01-pending";
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
-            const LABEL_RUNNING = "benchmark/04-running";
-            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
             async function listIssueComments() {
@@ -567,5 +564,5 @@ jobs:
               ].join("\n")
             );
 
-            await setStatusLabel(LABEL_RUNNING);
+            await setStatusLabel(LABEL_APPROVED);
             await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
