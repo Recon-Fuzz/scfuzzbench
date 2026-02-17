@@ -454,6 +454,16 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
+.sb-start__cost {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.48rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 44%, var(--vp-c-border));
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 70%, transparent);
+  color: var(--vp-c-text-1);
+}
+
 .sb-start__advanced {
   margin-top: 14px;
   padding-top: 14px;

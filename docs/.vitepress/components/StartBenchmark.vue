@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import ec2Pricing from "../generated/ec2-pricing.json";
 
 type BenchmarkType = "property" | "optimization";
+type Ec2PricingTable = Record<string, number>;
 
 const REPO_OWNER = "Recon-Fuzz";
 const REPO_NAME = "scfuzzbench";
 const NEW_ISSUE_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/issues/new`;
+const DEFAULT_FUZZER_ENV_OVERRIDE = JSON.stringify(
+  {
+    ECHIDNA_TARGET: "tests/recon/CryticTester.sol",
+  },
+  null,
+  2
+);
+const TARGET_REPO_OVERRIDE_KEY = "github.com/recon-fuzz/aave-v4-scfuzzbench";
 
 // Defaults are intentionally aligned with the repo's typical local `.env` values.
 // Avoid putting anything secret here: this is a fully static site.
@@ -64,7 +74,77 @@ const bitwuzlaVersion = ref("");
 const gitTokenSsmParameterName = ref("/scfuzzbench/recon/github_token");
 
 const propertiesPath = ref("");
-const fuzzerEnvJson = ref("");
+const fuzzerEnvJson = ref(DEFAULT_FUZZER_ENV_OVERRIDE);
+const autoOverrideApplied = ref(true);
+
+function normalizeRepoUrl(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\.git\/?$/, "")
+    .replace(/\/+$/, "");
+}
+
+function isDefaultOverrideRepo(url: string): boolean {
+  return normalizeRepoUrl(url) === TARGET_REPO_OVERRIDE_KEY;
+}
+
+watch(targetRepoUrl, (next) => {
+  if (!isDefaultOverrideRepo(next) && autoOverrideApplied.value) {
+    fuzzerEnvJson.value = "";
+    autoOverrideApplied.value = false;
+  }
+  if (isDefaultOverrideRepo(next) && !fuzzerEnvJson.value.trim()) {
+    fuzzerEnvJson.value = DEFAULT_FUZZER_ENV_OVERRIDE;
+    autoOverrideApplied.value = true;
+  }
+});
+
+watch(fuzzerEnvJson, (next) => {
+  if (!autoOverrideApplied.value) {
+    return;
+  }
+  const normalized = next.trim();
+  if (!isDefaultOverrideRepo(targetRepoUrl.value) || normalized !== DEFAULT_FUZZER_ENV_OVERRIDE.trim()) {
+    autoOverrideApplied.value = false;
+  }
+});
+
+const pricesUsdPerHour = computed<Ec2PricingTable>(() => {
+  const raw = (ec2Pricing as { prices_usd_per_hour?: Ec2PricingTable }).prices_usd_per_hour;
+  return raw && typeof raw === "object" ? raw : {};
+});
+
+const estimatedCostUsd = computed<number | null>(() => {
+  const perInstanceHour = pricesUsdPerHour.value[instanceType.value.trim()];
+  if (!Number.isFinite(perInstanceHour) || perInstanceHour <= 0) {
+    return null;
+  }
+  const selectedFuzzers = participatingFuzzerKeys.value.length;
+  const instances = Number(instancesPerFuzzer.value);
+  const hours = Number(timeoutHours.value);
+  if (!Number.isFinite(instances) || instances <= 0 || !Number.isFinite(hours) || hours <= 0 || selectedFuzzers <= 0) {
+    return null;
+  }
+  return perInstanceHour * instances * selectedFuzzers * hours;
+});
+
+const estimatedCostLabel = computed(() => {
+  const value = estimatedCostUsd.value;
+  if (value === null) {
+    return "";
+  }
+  let formatted: string;
+  if (value < 100) {
+    formatted = value.toFixed(2);
+  } else if (value < 1000) {
+    formatted = value.toFixed(1);
+  } else {
+    formatted = Math.round(value).toString();
+  }
+  return `~$ ${formatted}`;
+});
 
 const requestJson = computed(() => {
   const payload: Record<string, unknown> = {
@@ -208,6 +288,7 @@ const showAdvanced = ref(false);
 
         <button class="sb-start__button sb-start__button--ghost" type="button" @click="showAdvanced = !showAdvanced">
           {{ showAdvanced ? "Hide advanced" : "Show advanced" }}
+          <span v-if="estimatedCostLabel" class="sb-start__cost">{{ estimatedCostLabel }}</span>
         </button>
       </div>
 

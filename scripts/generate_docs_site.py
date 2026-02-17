@@ -15,6 +15,30 @@ from dataclasses import dataclass
 
 
 RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
+PRICING_API_REGION = "us-east-1"
+DEFAULT_DOCS_EC2_PRICES_USD_PER_HOUR = {
+    "c6a.4xlarge": 0.612,
+    "c6a.8xlarge": 1.224,
+}
+AWS_REGION_TO_PRICING_LOCATION = {
+    "us-east-1": "US East (N. Virginia)",
+    "us-east-2": "US East (Ohio)",
+    "us-west-1": "US West (N. California)",
+    "us-west-2": "US West (Oregon)",
+    "ca-central-1": "Canada (Central)",
+    "eu-west-1": "EU (Ireland)",
+    "eu-west-2": "EU (London)",
+    "eu-west-3": "EU (Paris)",
+    "eu-central-1": "EU (Frankfurt)",
+    "eu-north-1": "EU (Stockholm)",
+    "eu-south-1": "EU (Milan)",
+    "ap-south-1": "Asia Pacific (Mumbai)",
+    "ap-northeast-1": "Asia Pacific (Tokyo)",
+    "ap-northeast-2": "Asia Pacific (Seoul)",
+    "ap-southeast-1": "Asia Pacific (Singapore)",
+    "ap-southeast-2": "Asia Pacific (Sydney)",
+    "sa-east-1": "South America (Sao Paulo)",
+}
 
 
 def aws_env(profile: str | None) -> dict:
@@ -24,8 +48,12 @@ def aws_env(profile: str | None) -> dict:
     return env
 
 
-def aws_json(args: list[str], *, profile: str | None) -> dict:
-    out = subprocess.check_output(["aws", *args, "--output", "json"], text=True, env=aws_env(profile))
+def aws_json(args: list[str], *, profile: str | None, cli_region: str | None = None) -> dict:
+    cmd = ["aws"]
+    if cli_region:
+        cmd += ["--region", cli_region]
+    cmd += [*args, "--output", "json"]
+    out = subprocess.check_output(cmd, text=True, env=aws_env(profile))
     return json.loads(out) if out.strip() else {}
 
 
@@ -121,6 +149,75 @@ def compact_repo_label(repo_url: str) -> str:
             return rest or s
 
     return s
+
+
+def pricing_location_for_region(region: str) -> str:
+    return AWS_REGION_TO_PRICING_LOCATION.get(region, AWS_REGION_TO_PRICING_LOCATION["us-east-1"])
+
+
+def extract_ondemand_linux_usd_per_hour(pricing_data: dict) -> float | None:
+    candidates: list[float] = []
+    for entry in pricing_data.get("PriceList", []):
+        product = json.loads(entry) if isinstance(entry, str) else entry
+        if not isinstance(product, dict):
+            continue
+        terms = product.get("terms", {}).get("OnDemand", {})
+        if not isinstance(terms, dict):
+            continue
+        for term in terms.values():
+            if not isinstance(term, dict):
+                continue
+            dims = term.get("priceDimensions", {})
+            if not isinstance(dims, dict):
+                continue
+            for dim in dims.values():
+                if not isinstance(dim, dict):
+                    continue
+                usd = dim.get("pricePerUnit", {}).get("USD")
+                try:
+                    value = float(usd)
+                except Exception:
+                    continue
+                if value > 0:
+                    candidates.append(value)
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def fetch_ec2_pricing_table(instance_types: set[str], *, profile: str | None, region: str) -> dict[str, float]:
+    location = pricing_location_for_region(region)
+    results: dict[str, float] = {}
+    for instance_type in sorted(instance_types):
+        if not instance_type:
+            continue
+        try:
+            data = aws_json(
+                [
+                    "pricing",
+                    "get-products",
+                    "--service-code",
+                    "AmazonEC2",
+                    "--filters",
+                    f"Type=TERM_MATCH,Field=location,Value={location}",
+                    "Type=TERM_MATCH,Field=operatingSystem,Value=Linux",
+                    "Type=TERM_MATCH,Field=preInstalledSw,Value=NA",
+                    "Type=TERM_MATCH,Field=tenancy,Value=Shared",
+                    "Type=TERM_MATCH,Field=capacitystatus,Value=Used",
+                    "Type=TERM_MATCH,Field=licenseModel,Value=No License required",
+                    f"Type=TERM_MATCH,Field=instanceType,Value={instance_type}",
+                    "--max-results",
+                    "100",
+                ],
+                profile=profile,
+                cli_region=PRICING_API_REGION,
+            )
+            price = extract_ondemand_linux_usd_per_hour(data)
+            if price is not None:
+                results[instance_type] = round(price, 6)
+        except Exception as exc:
+            print(f"WARNING: pricing lookup failed for {instance_type}: {exc}", file=sys.stderr)
+    return results
 
 
 def format_fuzzer_lines(manifest: dict) -> list[str]:
@@ -280,6 +377,30 @@ def main() -> int:
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
     print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
+
+    # Build compile-time EC2 pricing table for the Start Benchmark page.
+    pricing_instance_types = {
+        str(r.manifest.get("instance_type", "")).strip()
+        for r in complete_runs
+        if str(r.manifest.get("instance_type", "")).strip()
+    }
+    pricing_instance_types.update(DEFAULT_DOCS_EC2_PRICES_USD_PER_HOUR.keys())
+    pricing_table = fetch_ec2_pricing_table(pricing_instance_types, profile=profile, region=region)
+    if not pricing_table:
+        pricing_table = dict(DEFAULT_DOCS_EC2_PRICES_USD_PER_HOUR)
+        print("WARNING: using fallback EC2 pricing table for docs.", file=sys.stderr)
+    pricing_payload = {
+        "generated_at_utc": generated_at,
+        "pricing_api_region": PRICING_API_REGION,
+        "requested_region": region,
+        "pricing_location": pricing_location_for_region(region),
+        "currency": "USD",
+        "prices_usd_per_hour": pricing_table,
+    }
+    write_text(
+        docs_dir / ".vitepress" / "generated" / "ec2-pricing.json",
+        json.dumps(pricing_payload, indent=2).rstrip() + "\n",
+    )
 
     # Clean previously generated run/benchmark subpages.
     rm_tree_children(

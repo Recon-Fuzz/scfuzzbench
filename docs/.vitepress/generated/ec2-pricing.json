@@ -1,0 +1,11 @@
+{
+  "generated_at_utc": "",
+  "pricing_api_region": "us-east-1",
+  "requested_region": "us-east-1",
+  "pricing_location": "US East (N. Virginia)",
+  "currency": "USD",
+  "prices_usd_per_hour": {
+    "c6a.4xlarge": 0.612,
+    "c6a.8xlarge": 1.224
+  }
+}
