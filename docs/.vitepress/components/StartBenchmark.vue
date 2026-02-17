@@ -288,8 +288,8 @@ const showAdvanced = ref(false);
 
         <button class="sb-start__button sb-start__button--ghost" type="button" @click="showAdvanced = !showAdvanced">
           {{ showAdvanced ? "Hide advanced" : "Show advanced" }}
-          <span v-if="estimatedCostLabel" class="sb-start__cost">{{ estimatedCostLabel }}</span>
         </button>
+        <div v-if="estimatedCostLabel" class="sb-start__cost">{{ estimatedCostLabel }}</div>
       </div>
 
       <div v-if="showAdvanced" class="sb-start__advanced">

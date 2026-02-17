@@ -455,13 +455,18 @@
 }
 
 .sb-start__cost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
   font-family: var(--vp-font-family-mono);
   font-size: 0.78rem;
-  padding: 0.2rem 0.48rem;
+  padding: 0.2rem 0.62rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 44%, var(--vp-c-border));
   background: color-mix(in srgb, var(--vp-c-brand-soft) 70%, transparent);
   color: var(--vp-c-text-1);
+  white-space: nowrap;
 }
 
 .sb-start__advanced {
