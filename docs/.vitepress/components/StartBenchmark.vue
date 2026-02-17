@@ -25,6 +25,7 @@ const targetCommit = ref("v0.5.6-recon");
 const benchmarkType = ref<BenchmarkType>("property");
 const instanceType = ref("c6a.4xlarge");
 const instancesPerFuzzer = ref(4);
+const maxParallelInstances = ref(0);
 const timeoutHours = ref(1);
 
 // Dynamically discover fuzzers from committed run scripts.
@@ -153,6 +154,7 @@ const requestJson = computed(() => {
     benchmark_type: benchmarkType.value,
     instance_type: instanceType.value.trim(),
     instances_per_fuzzer: instancesPerFuzzer.value,
+    max_parallel_instances: maxParallelInstances.value,
     timeout_hours: timeoutHours.value,
     fuzzers: participatingFuzzerKeys.value,
 
@@ -245,6 +247,18 @@ const showAdvanced = ref(false);
             type="number"
             min="1"
             max="20"
+            step="1"
+          />
+        </label>
+
+        <label class="sb-start__field">
+          <div class="sb-start__label">Max parallel workers (0 to use all shards)</div>
+          <input
+            v-model.number="maxParallelInstances"
+            class="sb-start__input"
+            type="number"
+            min="0"
+            max="400"
             step="1"
           />
         </label>

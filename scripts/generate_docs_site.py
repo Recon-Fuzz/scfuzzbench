@@ -13,6 +13,8 @@ import sys
 import time
 from dataclasses import dataclass
 
+from run_completion import is_queue_mode_run, is_run_complete, timeout_hours_from_manifest
+
 
 RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
 PRICING_API_REGION = "us-east-1"
@@ -342,9 +344,24 @@ def main() -> int:
             # Skip malformed or missing manifests.
             continue
 
-        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
-        deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
-        if now < deadline:
+        timeout_hours = safe_float(timeout_hours_from_manifest(manifest), 24.0)
+        queue_status = ""
+        if is_queue_mode_run(manifest):
+            status_key = f"runs/{run_id}/{benchmark_uuid}/status/run.json"
+            try:
+                status_raw = aws_text(["s3", "cp", f"s3://{bucket}/{status_key}", "-"], profile=profile)
+                status_obj = json.loads(status_raw)
+                queue_status = str(status_obj.get("status", "")).strip().lower()
+            except Exception:
+                continue
+
+        if not is_run_complete(
+            manifest,
+            run_id=str(run_id),
+            now_epoch=now,
+            grace_seconds=int(args.grace_seconds),
+            queue_status=queue_status,
+        ):
             continue
 
         analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
@@ -376,7 +393,7 @@ def main() -> int:
         )
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
-    print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
+    print(f"Found {len(complete_runs)} complete runs")
 
     # Build compile-time EC2 pricing table for the Start Benchmark page.
     pricing_instance_types = {

@@ -23,6 +23,7 @@ jobs:
       benchmark_type: ${{ steps.prepare.outputs.benchmark_type }}
       instance_type: ${{ steps.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ steps.prepare.outputs.instances_per_fuzzer }}
+      max_parallel_instances: ${{ steps.prepare.outputs.max_parallel_instances }}
       timeout_hours: ${{ steps.prepare.outputs.timeout_hours }}
       fuzzers_json: ${{ steps.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ steps.prepare.outputs.foundry_version }}
@@ -50,7 +51,8 @@ jobs:
             const LABEL_PENDING = "benchmark/01-pending";
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
-            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
+            const LABEL_RUNNING = "benchmark/04-running";
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
             const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry"];
 
             function uniq(arr) {
@@ -197,6 +199,7 @@ jobs:
             await ensureLabel(LABEL_PENDING, "dff6dd", "Benchmark request created and pending JSON validation.");
             await ensureLabel(LABEL_VALIDATED, "b7eab2", "Benchmark request JSON validated by bot.");
             await ensureLabel(LABEL_APPROVED, "5ccf58", "Benchmark request approved by maintainer.");
+            await ensureLabel(LABEL_RUNNING, "1f7a1f", "Benchmark request accepted; benchmark run started.");
 
             const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const authorAssociation = String(issue.author_association || "");
@@ -246,6 +249,9 @@ jobs:
 
             const inst = mustNumber(payload, "instances_per_fuzzer", { required: true, min: 1, max: 20, integer: true });
             if (!inst.ok) errors.push(inst.message);
+
+            const maxParallel = mustNumber(payload, "max_parallel_instances", { required: false, min: 0, max: 400, integer: true });
+            if (!maxParallel.ok) errors.push(maxParallel.message);
 
             const hours = mustNumber(payload, "timeout_hours", { required: true, min: 0.25, max: 72, integer: false });
             if (!hours.ok) errors.push(hours.message);
@@ -401,6 +407,7 @@ jobs:
                   `- Type: \`${bt}\``,
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Max parallel workers: \`${maxParallel.ok && maxParallel.value !== null ? maxParallel.value : 0}\``,
                   `- Timeout hours: \`${hours.value}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
                   "",
@@ -425,6 +432,7 @@ jobs:
                   `- Type: \`${bt}\``,
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Max parallel workers: \`${maxParallel.ok && maxParallel.value !== null ? maxParallel.value : 0}\``,
                   `- Timeout hours: \`${hours.value}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
                 ].join("\n")
@@ -437,6 +445,7 @@ jobs:
               core.setOutput("benchmark_type", bt);
               core.setOutput("instance_type", itype.value);
               core.setOutput("instances_per_fuzzer", String(inst.value));
+              core.setOutput("max_parallel_instances", String(maxParallel.ok && maxParallel.value !== null ? maxParallel.value : 0));
               core.setOutput("timeout_hours", String(hours.value));
               core.setOutput("fuzzers_json", fuzzersJson);
 
@@ -462,6 +471,7 @@ jobs:
       benchmark_type: ${{ needs.prepare.outputs.benchmark_type }}
       instance_type: ${{ needs.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ fromJSON(needs.prepare.outputs.instances_per_fuzzer) }}
+      max_parallel_instances: ${{ fromJSON(needs.prepare.outputs.max_parallel_instances) }}
       timeout_hours: ${{ fromJSON(needs.prepare.outputs.timeout_hours) }}
       fuzzers_json: ${{ needs.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ needs.prepare.outputs.foundry_version }}
@@ -494,7 +504,8 @@ jobs:
             const LABEL_PENDING = "benchmark/01-pending";
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
-            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
+            const LABEL_RUNNING = "benchmark/04-running";
+            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED, LABEL_RUNNING];
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
             async function listIssueComments() {
@@ -557,12 +568,12 @@ jobs:
                 "- Run ID: `" + run_id + "`",
                 "- Benchmark UUID: `" + benchmark_uuid + "`",
                 "",
-                "Docs:",
-                `- ${docsUrl}`,
-                "",
-                "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
-              ].join("\n")
-            );
+                  "Docs:",
+                  `- ${docsUrl}`,
+                  "",
+                  "_Note: the docs site only shows **complete** runs (queue-mode uses status/run.json terminal state; legacy runs use timeout + 1h grace)._",
+                ].join("\n")
+              );
 
-            await setStatusLabel(LABEL_APPROVED);
+            await setStatusLabel(LABEL_RUNNING);
             await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });

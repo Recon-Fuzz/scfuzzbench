@@ -9,23 +9,31 @@ fi
 
 systemctl enable --now ssh || systemctl enable --now sshd || true
 
-mkdir -p /opt/scfuzzbench/fuzzers/${fuzzer_key}
+mkdir -p /opt/scfuzzbench/fuzzers
 
 cat <<'SHARED' >/opt/scfuzzbench/common.sh
 ${shared_sh}
 SHARED
 
-cat <<'INSTALL' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
-${install_sh}
-INSTALL
+cat <<'QUEUE_WORKER' >/opt/scfuzzbench/queue_worker.sh
+${queue_worker_sh}
+QUEUE_WORKER
 
-cat <<'RUN' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
-${run_sh}
-RUN
+%{ for fuzzer_key, scripts in fuzzer_scripts ~}
+mkdir -p /opt/scfuzzbench/fuzzers/${fuzzer_key}
 
-chmod +x /opt/scfuzzbench/common.sh \
-  /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh \
-  /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+cat <<'INSTALL_${fuzzer_key}' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
+${scripts.install_sh}
+INSTALL_${fuzzer_key}
+
+cat <<'RUN_${fuzzer_key}' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+${scripts.run_sh}
+RUN_${fuzzer_key}
+
+chmod +x /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+%{ endfor ~}
+
+chmod +x /opt/scfuzzbench/common.sh /opt/scfuzzbench/queue_worker.sh
 
 source /opt/scfuzzbench/common.sh
 install_shutdown_script
@@ -48,11 +56,24 @@ export ECHIDNA_VERSION="${echidna_version}"
 export MEDUSA_VERSION="${medusa_version}"
 export BITWUZLA_VERSION="${bitwuzla_version}"
 export SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER="${git_token_ssm_parameter_name}"
+
+export SCFUZZBENCH_QUEUE_MODE="1"
+export SCFUZZBENCH_QUEUE_IDLE_POLLS="${queue_idle_polls}"
+export SCFUZZBENCH_QUEUE_EMPTY_SLEEP_SECONDS="${queue_empty_sleep_seconds}"
+export SCFUZZBENCH_SHARD_MAX_ATTEMPTS="${shard_max_attempts}"
+export SCFUZZBENCH_SHARD_RETRY_BASE_SECONDS="${shard_retry_base_seconds}"
+export SCFUZZBENCH_SHARD_RETRY_MAX_SECONDS="${shard_retry_max_seconds}"
+export SCFUZZBENCH_RUNNING_STALE_SECONDS="${running_stale_seconds}"
+export SCFUZZBENCH_LOCK_NAME="${control_lock_name}"
+export SCFUZZBENCH_LOCK_OBJECT_KEY="${control_lock_object_key}"
+export SCFUZZBENCH_LOCK_LEASE_SECONDS="${control_lock_lease_seconds}"
+export SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS="${control_lock_heartbeat_seconds}"
+export SCFUZZBENCH_MAX_PARALLEL_EFFECTIVE="${max_parallel_effective}"
+
 %{ for key, value in fuzzer_env ~}
 export ${key}="${value}"
 %{ endfor ~}
 
-bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
-bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh || true
+bash /opt/scfuzzbench/queue_worker.sh || true
 
 touch /opt/scfuzzbench/.bootstrapped

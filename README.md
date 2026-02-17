@@ -15,12 +15,15 @@ Benchmark suite for smart-contract fuzzers.
 
 ## How it works
 
-Terraform in `infrastructure/` launches N identical EC2 instances per fuzzer.
-Each instance:
-- Installs only its fuzzer (`fuzzers/<name>/install.sh`).
+Terraform in `infrastructure/` provisions a per-run shard queue and launches
+up to `max_parallel_instances` worker instances.
+Each worker:
+- Claims one `(fuzzer, run_index)` shard from S3 (`runs/<run_id>/<benchmark_uuid>/queue/shards/*.json`).
+- Installs that shard's fuzzer on demand (`fuzzers/<name>/install.sh`).
 - Clones the target repo at the pinned commit.
 - Runs `forge build`.
-- Executes `run.sh` under `timeout` so every run stops at the deadline.
+- Executes `run.sh` under `timeout` so every shard stops at the deadline.
+- Retries failed shards with exponential backoff until `shard_max_attempts`.
 
 Artifacts:
 - Logs:
@@ -64,7 +67,7 @@ Set these inputs via `-var`/`tfvars` when you run Terraform
 
 - `target_repo_url` and `target_commit`
 - `benchmark_type` (`property` or `optimization`)
-- `instance_type`, `instances_per_fuzzer`, `timeout_hours`
+- `instance_type`, `instances_per_fuzzer`, `max_parallel_instances`, `timeout_hours`
 - `fuzzers` (allowlist of fuzzer keys to run; empty runs all available fuzzers)
 - fuzzer versions (and `foundry_git_repo`/`foundry_git_ref` if building from
   source)
@@ -175,12 +178,13 @@ make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<
 
 Notes:
 - `timeout_hours` applies to the *fuzzer command* only; cloning, dependency install, and builds happen before the timeout.
-- A run is usually "ready" once the logs prefix contains `manifest.json` plus one logs zip per instance.
+- Queue-mode runs are "ready/complete" when `runs/<run_id>/<benchmark_uuid>/status/run.json` reports terminal `status` (`completed` or `failed`).
 - Quick readiness check (returns `0` until uploads start):
 
 ```bash
 aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "logs/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
 aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "corpus/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
+aws s3 cp "s3://$BUCKET/runs/$RUN_ID/$BENCHMARK_UUID/status/run.json" -
 ```
 
 Corpus note: by default, Echidna and Medusa upload corpus zips; Foundry uploads logs only.
@@ -224,13 +228,23 @@ Two workflows publish runs and releases directly from CI/CD:
 - `Benchmark Run` (`.github/workflows/benchmark-run.yml`)
   - Dispatch with inputs for repo/commit, benchmark type, instance type/count, and timeout hours.
   - Uses existing bucket from `SCFUZZBENCH_BUCKET` and region from `AWS_REGION`.
+  - Uses explicit worker parallelism via `max_parallel_instances` (0 means all requested shards).
+  - Enforces a **global mutex** (`benchmark-global-lock`): only one benchmark run is active at a time.
+  - New run requests wait with backoff until the active lock holder completes or the lock expires.
+  - Queue workers renew the lock lease while shards are still being processed.
+  - If lock renew fails repeatedly, workers fail closed and stop shard processing to avoid overlap with future runs.
+  - Lock orchestration is centralized in `scripts/benchmark_lock.py` (S3 lease acquire/renew/release).
+  - `SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS=0` (default) means lock waiting does not time out by policy. Set it to `>0` for explicit fail-fast behavior.
+  - Lock waiting is still bounded by GitHub Actions job runtime limits.
+  - Lock state is stored in S3 (`runs/control/locks/<lock_name>/...`) and expires automatically via lease timestamps, so no manual lock-table cleanup is required.
   - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
     `TF_BACKEND_CONFIG` (for remote state).
   - The run ID is auto-generated at dispatch time.
 
 - `Benchmark Release` (`.github/workflows/benchmark-release.yml`)
   - Dispatch manually with `benchmark_uuid` + `run_id`, or let the hourly schedule pick up completed runs.
-  - A run is considered complete once `run_id + timeout_hours + 1 hour` has elapsed.
+  - Queue-mode runs are considered complete when `runs/<run_id>/<benchmark_uuid>/status/run.json` is terminal.
+  - Legacy runs (without queue metadata) still use `run_id + timeout_hours + 1 hour`.
   - Publishes a GitHub release tagged `scfuzzbench-<benchmark_uuid>-<run_id>`.
   - Release notes are based on `REPORT.md` with an appended artifacts section.
   - Analysis artifacts (REPORT + charts + bundles) are uploaded to:

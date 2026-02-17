@@ -40,6 +40,12 @@ variable "instances_per_fuzzer" {
   default     = 10
 }
 
+variable "max_parallel_instances" {
+  type        = number
+  description = "Maximum concurrent worker instances. Set 0 to use all requested shards."
+  default     = 0
+}
+
 variable "timeout_hours" {
   type        = number
   description = "Timeout for each fuzzer run in hours."
@@ -153,6 +159,60 @@ variable "run_id" {
   type        = string
   description = "Run identifier (defaults to unix timestamp at apply time)."
   default     = ""
+}
+
+variable "control_lock_name" {
+  type        = string
+  description = "S3 lock key used to enforce a single active benchmark run."
+  default     = "benchmark-global-lock"
+}
+
+variable "control_lock_lease_seconds" {
+  type        = number
+  description = "Lease duration for the global run lock in S3. Queue workers renew this lease while the run is active."
+  default     = 7200
+}
+
+variable "control_lock_heartbeat_seconds" {
+  type        = number
+  description = "Heartbeat interval used by queue workers to extend the global run lock lease."
+  default     = 120
+}
+
+variable "queue_idle_polls" {
+  type        = number
+  description = "Number of consecutive empty polls before workers consider the shard queue drained."
+  default     = 3
+}
+
+variable "queue_empty_sleep_seconds" {
+  type        = number
+  description = "Sleep interval in seconds between empty queue polls."
+  default     = 10
+}
+
+variable "shard_max_attempts" {
+  type        = number
+  description = "Maximum retry attempts per shard before terminal failure."
+  default     = 5
+}
+
+variable "shard_retry_base_seconds" {
+  type        = number
+  description = "Base retry delay in seconds for exponential shard retries."
+  default     = 30
+}
+
+variable "shard_retry_max_seconds" {
+  type        = number
+  description = "Maximum retry delay in seconds for exponential shard retries."
+  default     = 300
+}
+
+variable "running_stale_seconds" {
+  type        = number
+  description = "How long a shard can stay in running state without heartbeat before it is reclaimed for retry."
+  default     = 900
 }
 
 variable "tags" {

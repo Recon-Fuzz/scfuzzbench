@@ -19,11 +19,37 @@ output "ssh_private_key_path" {
 }
 
 output "instance_ids" {
-  description = "Instance IDs by fuzzer and index."
+  description = "Worker instance IDs by slot."
   value       = { for key, instance in aws_instance.fuzzer : key => instance.id }
 }
 
 output "instance_public_ips" {
-  description = "Public IPs by fuzzer and index."
+  description = "Worker public IPs by slot."
   value       = { for key, instance in aws_instance.fuzzer : key => instance.public_ip }
+}
+
+output "requested_shards" {
+  description = "Total shard count requested for this run."
+  value       = local.requested_shard_count
+}
+
+output "max_parallel_effective" {
+  description = "Effective worker concurrency for this run."
+  value       = local.max_parallel_effective
+}
+
+output "shards" {
+  description = "Shard descriptors for this run."
+  value = [
+    for shard in local.instances : {
+      shard_key  = shard.key
+      fuzzer_key = shard.fuzzer_key
+      run_index  = shard.run_index
+    }
+  ]
+}
+
+output "control_lock_object_key" {
+  description = "S3 object key used for the global run lock lease."
+  value       = local.control_lock_object_key
 }

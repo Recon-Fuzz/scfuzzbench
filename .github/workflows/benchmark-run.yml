@@ -26,6 +26,11 @@ on:
         required: true
         type: number
         default: 10
+      max_parallel_instances:
+        description: "Maximum concurrent workers (0 means all requested shards)."
+        required: false
+        type: number
+        default: 0
       timeout_hours:
         description: "Timeout per fuzzer run (hours)."
         required: true
@@ -96,6 +101,11 @@ on:
         required: false
         type: number
         default: 10
+      max_parallel_instances:
+        description: "Maximum concurrent workers (0 means all requested shards)."
+        required: false
+        type: number
+        default: 0
       timeout_hours:
         description: "Timeout per fuzzer run (hours)."
         required: false
@@ -173,6 +183,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: benchmark-run-global-dispatch
+  cancel-in-progress: false
+
 jobs:
   benchmark-run:
     runs-on: ubuntu-latest
@@ -182,6 +196,14 @@ jobs:
     env:
       AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
+      SCFUZZBENCH_LOCK_NAME: benchmark-global-lock
+      SCFUZZBENCH_LOCK_LEASE_SECONDS: "7200"
+      SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS: "0"
+      SCFUZZBENCH_LOCK_ACQUIRE_MAX_BACKOFF_SECONDS: "120"
+      SCFUZZBENCH_LOCK_RENEW_HEARTBEAT_SECONDS: "60"
+      TF_APPLY_MAX_ATTEMPTS: "6"
+      TF_APPLY_BASE_BACKOFF_SECONDS: "30"
+      TF_APPLY_MAX_BACKOFF_SECONDS: "300"
     steps:
       - name: Checkout (tarball)
         timeout-minutes: 5
@@ -251,6 +273,7 @@ jobs:
           BENCHMARK_TYPE: ${{ inputs.benchmark_type }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          MAX_PARALLEL_INSTANCES: ${{ inputs.max_parallel_instances }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
@@ -349,6 +372,13 @@ jobs:
             fail "instances_per_fuzzer must be an integer in [1, 20]"
           fi
 
+          if [[ ! "${MAX_PARALLEL_INSTANCES}" =~ ^[0-9]+$ ]]; then
+            fail "max_parallel_instances must be an integer >= 0"
+          fi
+          if (( MAX_PARALLEL_INSTANCES > 400 )); then
+            fail "max_parallel_instances must be <= 400"
+          fi
+
           if [[ ! "${TIMEOUT_HOURS}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
             fail "timeout_hours must be a number"
           fi
@@ -428,6 +458,66 @@ jobs:
           PY
           fi
 
+      - name: Plan shard execution
+        id: shard_plan
+        env:
+          INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          MAX_PARALLEL_INSTANCES: ${{ inputs.max_parallel_instances }}
+        run: |
+          set -euo pipefail
+          run_id="$(date +%s)"
+          fuzzers="${FUZZERS_JSON:-}"
+          if [[ -z "${fuzzers}" ]]; then
+            fuzzers='["echidna","medusa","foundry"]'
+          fi
+          fuzzer_count="$(FUZZERS_JSON="${fuzzers}" python3 - <<'PY'
+          import json
+          import os
+          obj = json.loads(os.environ["FUZZERS_JSON"])
+          print(len(obj))
+          PY
+          )"
+          requested_shards="$((INSTANCES_PER_FUZZER * fuzzer_count))"
+          effective_parallel="$(REQUESTED_SHARDS="${requested_shards}" MAX_PARALLEL_INSTANCES="${MAX_PARALLEL_INSTANCES}" python3 - <<'PY'
+          import os
+
+          requested = int(os.environ["REQUESTED_SHARDS"])
+          requested_max = int(os.environ["MAX_PARALLEL_INSTANCES"])
+          effective = requested if requested_max <= 0 else min(requested, requested_max)
+
+          if effective < 1:
+              effective = 1
+          print(effective)
+          PY
+          )"
+
+          {
+            echo "run_id=${run_id}"
+            echo "fuzzers_json=${fuzzers}"
+            echo "requested_shards=${requested_shards}"
+            echo "effective_parallel=${effective_parallel}"
+            echo "max_parallel_requested=${MAX_PARALLEL_INSTANCES}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Acquire global run lock
+        id: lock
+        env:
+          RUN_ID: ${{ steps.shard_plan.outputs.run_id }}
+          LOCK_LEASE_SECONDS: ${{ env.SCFUZZBENCH_LOCK_LEASE_SECONDS }}
+          LOCK_WAIT_TIMEOUT_SECONDS: ${{ env.SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS }}
+          LOCK_MAX_BACKOFF_SECONDS: ${{ env.SCFUZZBENCH_LOCK_ACQUIRE_MAX_BACKOFF_SECONDS }}
+        run: |
+          set -euo pipefail
+          python3 scripts/benchmark_lock.py acquire \
+            --bucket "${SCFUZZBENCH_BUCKET}" \
+            --lock-name "${SCFUZZBENCH_LOCK_NAME}" \
+            --owner-run-id "${RUN_ID}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --lease-seconds "${LOCK_LEASE_SECONDS}" \
+            --wait-timeout-seconds "${LOCK_WAIT_TIMEOUT_SECONDS}" \
+            --max-backoff-seconds "${LOCK_MAX_BACKOFF_SECONDS}"
+
       - name: Terraform apply
         id: apply
         env:
@@ -437,7 +527,9 @@ jobs:
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
-          FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          FUZZERS_JSON: ${{ steps.shard_plan.outputs.fuzzers_json }}
+          MAX_PARALLEL_EFFECTIVE: ${{ steps.shard_plan.outputs.effective_parallel }}
+          RUN_ID: ${{ steps.shard_plan.outputs.run_id }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
@@ -447,14 +539,48 @@ jobs:
           GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
           PROPERTIES_PATH: ${{ inputs.properties_path }}
+          LOCK_LEASE_SECONDS: ${{ steps.lock.outputs.lock_lease_seconds || env.SCFUZZBENCH_LOCK_LEASE_SECONDS }}
+          LOCK_HEARTBEAT_SECONDS: "120"
+          TF_APPLY_MAX_ATTEMPTS: ${{ env.TF_APPLY_MAX_ATTEMPTS }}
+          TF_APPLY_BASE_BACKOFF_SECONDS: ${{ env.TF_APPLY_BASE_BACKOFF_SECONDS }}
+          TF_APPLY_MAX_BACKOFF_SECONDS: ${{ env.TF_APPLY_MAX_BACKOFF_SECONDS }}
+          LOCK_RENEW_HEARTBEAT_SECONDS: ${{ env.SCFUZZBENCH_LOCK_RENEW_HEARTBEAT_SECONDS }}
         run: |
           set -euo pipefail
-          run_id=$(date +%s)
           fuzzers="${FUZZERS_JSON:-}"
           if [[ -z "${fuzzers}" ]]; then
             fuzzers='["echidna","medusa","foundry"]'
           fi
-          tf_args=(
+          if ! [[ "${MAX_PARALLEL_EFFECTIVE}" =~ ^[0-9]+$ ]] || (( MAX_PARALLEL_EFFECTIVE < 1 )); then
+            echo "Invalid MAX_PARALLEL_EFFECTIVE: ${MAX_PARALLEL_EFFECTIVE}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_LEASE_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_LEASE_SECONDS < 300 )); then
+            echo "Invalid LOCK_LEASE_SECONDS: ${LOCK_LEASE_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_HEARTBEAT_SECONDS < 30 )); then
+            echo "Invalid LOCK_HEARTBEAT_SECONDS: ${LOCK_HEARTBEAT_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${LOCK_RENEW_HEARTBEAT_SECONDS}" =~ ^[0-9]+$ ]] || (( LOCK_RENEW_HEARTBEAT_SECONDS < 10 )); then
+            echo "Invalid LOCK_RENEW_HEARTBEAT_SECONDS: ${LOCK_RENEW_HEARTBEAT_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_MAX_ATTEMPTS < 1 )); then
+            echo "Invalid TF_APPLY_MAX_ATTEMPTS: ${TF_APPLY_MAX_ATTEMPTS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_BASE_BACKOFF_SECONDS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_BASE_BACKOFF_SECONDS < 1 )); then
+            echo "Invalid TF_APPLY_BASE_BACKOFF_SECONDS: ${TF_APPLY_BASE_BACKOFF_SECONDS}" >&2
+            exit 1
+          fi
+          if ! [[ "${TF_APPLY_MAX_BACKOFF_SECONDS}" =~ ^[0-9]+$ ]] || (( TF_APPLY_MAX_BACKOFF_SECONDS < TF_APPLY_BASE_BACKOFF_SECONDS )); then
+            echo "Invalid TF_APPLY_MAX_BACKOFF_SECONDS: ${TF_APPLY_MAX_BACKOFF_SECONDS}" >&2
+            exit 1
+          fi
+
+          tf_common_args=(
             -var "aws_region=${AWS_REGION}"
             -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
             -var "target_repo_url=${TARGET_REPO_URL}"
@@ -464,30 +590,33 @@ jobs:
             -var "instances_per_fuzzer=${INSTANCES_PER_FUZZER}"
             -var "timeout_hours=${TIMEOUT_HOURS}"
             -var "fuzzers=${fuzzers}"
-            -var "run_id=${run_id}"
+            -var "run_id=${RUN_ID}"
             -var "scfuzzbench_commit=${GITHUB_SHA}"
+            -var "control_lock_name=${SCFUZZBENCH_LOCK_NAME}"
+            -var "control_lock_lease_seconds=${LOCK_LEASE_SECONDS}"
+            -var "control_lock_heartbeat_seconds=${LOCK_HEARTBEAT_SECONDS}"
           )
 
           if [[ -n "${FOUNDRY_VERSION}" ]]; then
-            tf_args+=(-var "foundry_version=${FOUNDRY_VERSION}")
+            tf_common_args+=(-var "foundry_version=${FOUNDRY_VERSION}")
           fi
           if [[ -n "${FOUNDRY_GIT_REPO}" ]]; then
-            tf_args+=(-var "foundry_git_repo=${FOUNDRY_GIT_REPO}")
+            tf_common_args+=(-var "foundry_git_repo=${FOUNDRY_GIT_REPO}")
           fi
           if [[ -n "${FOUNDRY_GIT_REF}" ]]; then
-            tf_args+=(-var "foundry_git_ref=${FOUNDRY_GIT_REF}")
+            tf_common_args+=(-var "foundry_git_ref=${FOUNDRY_GIT_REF}")
           fi
           if [[ -n "${ECHIDNA_VERSION}" ]]; then
-            tf_args+=(-var "echidna_version=${ECHIDNA_VERSION}")
+            tf_common_args+=(-var "echidna_version=${ECHIDNA_VERSION}")
           fi
           if [[ -n "${MEDUSA_VERSION}" ]]; then
-            tf_args+=(-var "medusa_version=${MEDUSA_VERSION}")
+            tf_common_args+=(-var "medusa_version=${MEDUSA_VERSION}")
           fi
           if [[ -n "${BITWUZLA_VERSION}" ]]; then
-            tf_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
+            tf_common_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
           fi
           if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
-            tf_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")
+            tf_common_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")
           fi
 
           if [[ -n "${FUZZER_ENV_JSON}" || -n "${PROPERTIES_PATH}" ]]; then
@@ -505,11 +634,76 @@ jobs:
           print(json.dumps(data))
           PY
             )
-            tf_args+=(-var "fuzzer_env=${merged}")
+            tf_common_args+=(-var "fuzzer_env=${merged}")
           fi
 
-          terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}"
-          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          current_parallel="${MAX_PARALLEL_EFFECTIVE}"
+          apply_attempt=1
+          while true; do
+            tf_args=("${tf_common_args[@]}" -var "max_parallel_instances=${current_parallel}")
+            echo "Terraform apply attempt ${apply_attempt}/${TF_APPLY_MAX_ATTEMPTS} with max_parallel_instances=${current_parallel}"
+            set +e
+            (
+              terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}" 2>&1 | tee terraform-apply.log
+            ) &
+            apply_pid=$!
+            renew_failed=0
+            while kill -0 "${apply_pid}" >/dev/null 2>&1; do
+              sleep "${LOCK_RENEW_HEARTBEAT_SECONDS}" || true
+              if ! kill -0 "${apply_pid}" >/dev/null 2>&1; then
+                break
+              fi
+              if ! python3 scripts/benchmark_lock.py renew \
+                --bucket "${SCFUZZBENCH_BUCKET}" \
+                --lock-name "${SCFUZZBENCH_LOCK_NAME}" \
+                --owner-run-id "${RUN_ID}" \
+                --lease-seconds "${LOCK_LEASE_SECONDS}"; then
+                renew_failed=1
+                kill "${apply_pid}" >/dev/null 2>&1 || true
+                break
+              fi
+            done
+            wait "${apply_pid}"
+            rc=$?
+            set -e
+            if (( renew_failed != 0 )); then
+              echo "Failed to renew global lock during terraform apply; aborting bootstrap." >&2
+              exit 1
+            fi
+
+            if (( rc == 0 )); then
+              {
+                echo "applied_parallel=${current_parallel}"
+                echo "apply_attempts=${apply_attempt}"
+              } >> "${GITHUB_OUTPUT}"
+              break
+            fi
+
+            if (( apply_attempt >= TF_APPLY_MAX_ATTEMPTS )); then
+              echo "Terraform apply failed after ${apply_attempt} attempt(s)." >&2
+              exit "${rc}"
+            fi
+
+            if ! grep -Eiq "(InsufficientInstanceCapacity|VcpuLimitExceeded|RequestLimitExceeded|ServiceUnavailable|Unavailable|InternalError|InsufficientFreeAddressesInSubnet|capacity)" terraform-apply.log; then
+              echo "Terraform apply failed with a non-retryable error." >&2
+              exit "${rc}"
+            fi
+
+            exponent=$((apply_attempt - 1))
+            raw_delay=$((TF_APPLY_BASE_BACKOFF_SECONDS * (2 ** exponent)))
+            if (( raw_delay > TF_APPLY_MAX_BACKOFF_SECONDS )); then
+              raw_delay=${TF_APPLY_MAX_BACKOFF_SECONDS}
+            fi
+            jitter=$((RANDOM % (TF_APPLY_BASE_BACKOFF_SECONDS + 1)))
+            delay=$((raw_delay + jitter))
+            if (( delay > TF_APPLY_MAX_BACKOFF_SECONDS )); then
+              delay=${TF_APPLY_MAX_BACKOFF_SECONDS}
+            fi
+
+            echo "Capacity/transient apply failure detected. Retrying in ${delay}s with max_parallel_instances=${current_parallel}."
+            apply_attempt=$((apply_attempt + 1))
+            sleep "${delay}"
+          done
 
       - name: Collect Terraform outputs
         id: tf_outputs
@@ -522,6 +716,35 @@ jobs:
             echo "benchmark_uuid=${benchmark_uuid}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Initialize S3 queue state
+        id: init_queue
+        run: |
+          set -euo pipefail
+          jq -c '.shards.value' run_metadata.json > shards.json
+          python3 scripts/queue_init_run.py \
+            --bucket "${SCFUZZBENCH_BUCKET}" \
+            --run-id "$(jq -r '.run_id.value' run_metadata.json)" \
+            --benchmark-uuid "$(jq -r '.benchmark_uuid.value' run_metadata.json)" \
+            --max-parallel-effective "$(jq -r '.max_parallel_effective.value' run_metadata.json)" \
+            --shards-json shards.json \
+            --summary-path queue-init-summary.json
+
+      - name: Mark lock handoff
+        id: lock_handoff
+        if: ${{ steps.init_queue.outcome == 'success' }}
+        run: echo "handoff=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Release global lock on bootstrap failure
+        if: ${{ failure() && steps.lock.outputs.lock_acquired == 'true' && steps.lock_handoff.outputs.handoff != 'true' }}
+        env:
+          RUN_ID: ${{ steps.shard_plan.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/benchmark_lock.py release \
+            --bucket "${SCFUZZBENCH_BUCKET}" \
+            --lock-name "${SCFUZZBENCH_LOCK_NAME}" \
+            --owner-run-id "${RUN_ID}"
+
       - name: Upload run metadata
         uses: actions/upload-artifact@v4
         with:
@@ -530,9 +753,18 @@ jobs:
 
       - name: Summary
         run: |
+          applied_parallel="${{ steps.apply.outputs.applied_parallel }}"
+          if [[ -z "${applied_parallel}" ]]; then
+            applied_parallel="${{ steps.shard_plan.outputs.effective_parallel }}"
+          fi
           {
             echo "Benchmark run started."
             echo ""
             echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
             echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
+            echo "- Requested shards: ${{ steps.shard_plan.outputs.requested_shards }}"
+            echo "- Max parallel workers (applied): ${applied_parallel}"
+            echo "- Terraform apply attempts: ${{ steps.apply.outputs.apply_attempts }}"
+            echo "- Global lock acquisition attempts: ${{ steps.lock.outputs.lock_attempts }}"
+            echo "- Global lock object: ${{ steps.lock.outputs.lock_object_key }}"
           } >> "${GITHUB_STEP_SUMMARY}"

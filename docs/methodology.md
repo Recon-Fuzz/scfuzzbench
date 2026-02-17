@@ -39,33 +39,47 @@ Terraform computes two IDs used across the pipeline:
 - `benchmark_type`, `instance_type`, `instances_per_fuzzer`, `timeout_hours`
 - `aws_region`, `ubuntu_ami_id`
 - tool versions and selected `fuzzer_keys`
+- queue/mutex settings (`requested_shards`, `max_parallel_instances`, retry policy, lock lease/heartbeat)
+
+At terminal completion, queue workers update manifest fields with final shard counters
+(`final_requested_shards`, `final_succeeded_shards`, `final_failed_shards`).
 
 This means changing any of those manifest fields changes `benchmark_uuid`.
 
-### 3) Provision equivalent runners
+### 3) Provision queue + worker pool
 
-Terraform provisions one EC2 instance per `(fuzzer, run_index)` pair:
+Terraform provisions queue-backed execution resources:
 
-- Same AMI family for all (`ubuntu_ami_ssm_parameter`).
-- Same instance type and timeout budget for all fuzzers in a run.
+- S3 shard/state prefixes per run:
+  - `runs/<run_id>/<benchmark_uuid>/queue/shards/*.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/run.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/workers/*.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/events/*.json`
+  - `runs/<run_id>/<benchmark_uuid>/dlq/*.json`
+- A fixed-size EC2 worker pool (`max_parallel_instances`) instead of one instance per shard.
+- Same AMI family, instance type, and timeout budget for all workers in a run.
 - AZ auto-selected from offering data for the requested instance type (unless `availability_zone` is explicitly set).
 - `user_data_replace_on_change = true` so runner behavior changes trigger replacement.
 
-### 4) Execute benchmark on each runner
+### 4) Execute benchmark shards from queue
 
 Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/_shared/common.sh`:
 
-- Install only that runner's fuzzer implementation (`fuzzers/<name>/install.sh`).
-- Clone target repository and checkout the pinned commit.
-- Build with `forge build`.
+- Queue init seeds one shard object per `(fuzzer, run_index)` shard under `queue/shards/`.
+- Shard lifecycle is explicit in S3: `queued -> running -> (succeeded|failed|timed_out)` with `retrying` on retry backoff.
+- Worker polls shard objects, claims one eligible shard, installs that shard's fuzzer if needed, and runs it.
+- Worker lock lease heartbeat is fail-closed: repeated renew failures stop processing to avoid overlapping active runs.
+- Benchmark requests contend on a global lock with exponential backoff.
+- Lock orchestration (acquire/renew/release) is centralized in `scripts/benchmark_lock.py`.
+- Default lock acquire timeout is `0` (unbounded by policy); optional positive timeout values enable explicit fail-fast lock waits.
+- Lock waiting is still bounded by GitHub Actions job runtime limits.
+- Lock state is stored in S3 (`runs/control/locks/<lock_name>/...`) and recovers automatically when leases expire.
+- Clone target repository and checkout pinned commit, then build with `forge build`.
 - Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).
-- Collect host metrics periodically into `runner_metrics.csv` (enabled by default).
-- Upload artifacts to S3, then self-shutdown.
-
-Instances are intentionally one-shot:
-
-- A bootstrap sentinel (`/opt/scfuzzbench/.bootstrapped`) avoids accidental reruns after reboot.
-- Shutdown occurs even on failures via trap/finalizer handling.
+- Collect runner metrics into `runner_metrics.csv`.
+- Upload shard artifacts to S3.
+- On failure, worker retries shard with exponential backoff up to `shard_max_attempts`; terminal failures go to `dlq/`.
+- Worker exits only when the shard set is terminal and `status/run.json` is terminal.
 
 ### 5) Benchmark type switching
 
@@ -87,15 +101,16 @@ Each instance uploads:
 
 ## What Counts as a Complete Run
 
-Docs and release automation use the same completion rule:
+Docs and release automation use queue-aware completion:
 
-- `now >= run_id + (timeout_hours * 3600) + 3600`
+- Queue-mode runs: `runs/<run_id>/<benchmark_uuid>/status/run.json` must be terminal (`completed` or `failed`).
+- Legacy runs (without queue metadata): `now >= run_id + (timeout_hours * 3600) + 3600`.
 
 Notes:
 
 - `run_id` is interpreted as a Unix timestamp.
 - `timeout_hours` comes from `manifest.json` (default `24` if missing).
-- `3600` is a fixed 1-hour grace window.
+- Queue-mode completion is status-driven; legacy completion remains time-driven.
 
 This rule is implemented in:
 
