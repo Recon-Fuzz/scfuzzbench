@@ -8,13 +8,9 @@ type Ec2PricingTable = Record<string, number>;
 const REPO_OWNER = "Recon-Fuzz";
 const REPO_NAME = "scfuzzbench";
 const NEW_ISSUE_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/issues/new`;
-const DEFAULT_FUZZER_ENV_OVERRIDE = JSON.stringify(
-  {
-    ECHIDNA_TARGET: "tests/recon/CryticTester.sol",
-  },
-  null,
-  2
-);
+const DEFAULT_FUZZER_ENV_OVERRIDE = JSON.stringify({
+  ECHIDNA_TARGET: "tests/recon/CryticTester.sol",
+});
 const TARGET_REPO_OVERRIDE_KEY = "github.com/recon-fuzz/aave-v4-scfuzzbench";
 
 // Defaults are intentionally aligned with the repo's typical local `.env` values.
@@ -146,6 +142,22 @@ const estimatedCostLabel = computed(() => {
   return `~$ ${formatted}`;
 });
 
+const normalizedFuzzerEnvJson = computed(() => {
+  const raw = fuzzerEnvJson.value.trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return raw;
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return raw;
+  }
+});
+
 const requestJson = computed(() => {
   const payload: Record<string, unknown> = {
     target_repo_url: targetRepoUrl.value.trim(),
@@ -167,7 +179,7 @@ const requestJson = computed(() => {
     git_token_ssm_parameter_name: gitTokenSsmParameterName.value.trim(),
 
     properties_path: propertiesPath.value.trim(),
-    fuzzer_env_json: fuzzerEnvJson.value.trim(),
+    fuzzer_env_json: normalizedFuzzerEnvJson.value,
   };
 
   return JSON.stringify(payload, null, 2);
