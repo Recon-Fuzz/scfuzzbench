@@ -15,18 +15,25 @@ Benchmark suite for smart-contract fuzzers.
 
 ## How it works
 
-Terraform in `infrastructure/` launches N identical EC2 instances per fuzzer.
-Each instance:
-- Installs only its fuzzer (`fuzzers/<name>/install.sh`).
-- Clones the target repo at the pinned commit.
-- Runs `forge build`.
-- Executes `run.sh` under `timeout` so every run stops at the deadline.
+Terraform in `infrastructure/` launches a fixed worker pool
+(`max_parallel_instances`) and queues shard state in S3.
+Each worker:
+- Installs all selected fuzzers once.
+- Acquires and heartbeats a global S3 lease lock.
+- Claims shard objects from `runs/<run_id>/<benchmark_uuid>/queue/shards/`.
+- Executes the shard's `run.sh` under `timeout`.
+- Writes shard/run/worker/event status back to S3 and exits once the run is terminal.
 
 Artifacts:
 - Logs:
   `s3://<bucket>/logs/<run_id>/<benchmark_uuid>/i-XXXX-<fuzzer-version>.zip`
 - Corpus output (when configured):
   `s3://<bucket>/corpus/<run_id>/<benchmark_uuid>/i-XXXX-<fuzzer-version>.zip`
+- Queue/run status:
+  - `runs/<run_id>/<benchmark_uuid>/status/run.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/workers/<instance_id>.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/events/<ts>-<instance>-<shard>-<status>.json`
+  - `runs/<run_id>/<benchmark_uuid>/dlq/<shard_key>-<attempt>.json`
 - Runner metrics (CPU/memory/load) are recorded in `runner_metrics.csv` inside each logs zip.
 
 `<run_id>` defaults to a unix timestamp captured once per Terraform state (via
@@ -64,7 +71,7 @@ Set these inputs via `-var`/`tfvars` when you run Terraform
 
 - `target_repo_url` and `target_commit`
 - `benchmark_type` (`property` or `optimization`)
-- `instance_type`, `instances_per_fuzzer`, `timeout_hours`
+- `instance_type`, `instances_per_fuzzer`, `max_parallel_instances`, `timeout_hours`
 - `fuzzers` (allowlist of fuzzer keys to run; empty runs all available fuzzers)
 - fuzzer versions (and `foundry_git_repo`/`foundry_git_ref` if building from
   source)
@@ -94,6 +101,7 @@ export TF_VAR_target_repo_url="https://github.com/org/repo"
 export TF_VAR_target_commit="..."
 export TF_VAR_timeout_hours=1
 export TF_VAR_instances_per_fuzzer=4
+export TF_VAR_max_parallel_instances=3
 export TF_VAR_fuzzers='["echidna","medusa","foundry"]'
 export TF_VAR_git_token_ssm_parameter_name="/scfuzzbench/recon/github_token"
 export TF_VAR_foundry_git_repo="https://github.com/your-org/foundry"
@@ -175,12 +183,13 @@ make results-analyze-all BUCKET=<bucket-name> RUN_ID=1770053924 BENCHMARK_UUID=<
 
 Notes:
 - `timeout_hours` applies to the *fuzzer command* only; cloning, dependency install, and builds happen before the timeout.
-- A run is usually "ready" once the logs prefix contains `manifest.json` plus one logs zip per instance.
-- Quick readiness check (returns `0` until uploads start):
+- Queue-mode runs are complete when `runs/<run_id>/<benchmark_uuid>/status/run.json` is terminal.
+- Quick readiness check:
 
 ```bash
-aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "logs/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
-aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "corpus/$BENCHMARK_UUID/$RUN_ID/" --max-keys 1000 --query 'KeyCount' --output text
+aws s3 cp "s3://$BUCKET/runs/$RUN_ID/$BENCHMARK_UUID/status/run.json" -
+aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "logs/$RUN_ID/$BENCHMARK_UUID/" --max-keys 1000 --query 'KeyCount' --output text
+aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "corpus/$RUN_ID/$BENCHMARK_UUID/" --max-keys 1000 --query 'KeyCount' --output text
 ```
 
 Corpus note: by default, Echidna and Medusa upload corpus zips; Foundry uploads logs only.
@@ -222,15 +231,15 @@ aws ec2 get-console-output --instance-id i-0123456789abcdef0 --latest --output j
 Two workflows publish runs and releases directly from CI/CD:
 
 - `Benchmark Run` (`.github/workflows/benchmark-run.yml`)
-  - Dispatch with inputs for repo/commit, benchmark type, instance type/count, and timeout hours.
+  - Dispatch with inputs for repo/commit, benchmark type, shard count (`instances_per_fuzzer`), max parallel worker count (`max_parallel_instances`), and timeout hours.
   - Uses existing bucket from `SCFUZZBENCH_BUCKET` and region from `AWS_REGION`.
   - Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SCFUZZBENCH_BUCKET`,
     `TF_BACKEND_CONFIG` (for remote state).
-  - The run ID is auto-generated at dispatch time.
+  - The run ID is auto-generated at dispatch time and acquires a global S3 lock before Terraform apply.
 
 - `Benchmark Release` (`.github/workflows/benchmark-release.yml`)
   - Dispatch manually with `benchmark_uuid` + `run_id`, or let the hourly schedule pick up completed runs.
-  - A run is considered complete once `run_id + timeout_hours + 1 hour` has elapsed.
+  - Completion is status-aware: queue runs wait for terminal `status/run.json` (legacy runs still use timeout+grace fallback).
   - Publishes a GitHub release tagged `scfuzzbench-<benchmark_uuid>-<run_id>`.
   - Release notes are based on `REPORT.md` with an appended artifacts section.
   - Analysis artifacts (REPORT + charts + bundles) are uploaded to:

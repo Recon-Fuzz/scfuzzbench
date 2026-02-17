@@ -9,33 +9,6 @@ locals {
   # when AWS auto-selects an AZ where the type isn't offered.
   subnet_availability_zone = var.availability_zone != "" ? var.availability_zone : sort(data.aws_ec2_instance_type_offerings.fuzzer.locations)[0]
 
-  benchmark_manifest = merge(
-    {
-      scfuzzbench_commit   = var.scfuzzbench_commit
-      target_repo_url      = var.target_repo_url
-      target_commit        = var.target_commit
-      benchmark_type       = var.benchmark_type
-      instance_type        = var.instance_type
-      instances_per_fuzzer = var.instances_per_fuzzer
-      timeout_hours        = var.timeout_hours
-      aws_region           = var.aws_region
-      ubuntu_ami_id        = data.aws_ssm_parameter.ubuntu_ami.value
-      foundry_version      = var.foundry_version
-      foundry_git_repo     = var.foundry_git_repo
-      foundry_git_ref      = var.foundry_git_ref
-      echidna_version      = var.echidna_version
-      medusa_version       = var.medusa_version
-      fuzzer_keys          = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
-    },
-    contains(local.selected_fuzzer_keys, "echidna-symexec") ? {
-      bitwuzla_version = var.bitwuzla_version
-    } : {}
-  )
-
-  benchmark_manifest_json = jsonencode(local.benchmark_manifest)
-  benchmark_manifest_b64  = base64encode(local.benchmark_manifest_json)
-  benchmark_uuid          = md5(local.benchmark_manifest_json)
-
   base_fuzzer_definitions = [
     {
       key          = "echidna"
@@ -68,17 +41,55 @@ locals {
     fuzzer if contains(local.selected_fuzzer_keys, fuzzer.key)
   ]
 
-  instances = flatten([
+  shards = flatten([
     for fuzzer in local.fuzzer_definitions : [
       for index in range(var.instances_per_fuzzer) : {
-        key       = "${fuzzer.key}-${index}"
-        fuzzer    = fuzzer
+        shard_key = "${fuzzer.key}-${index}"
+        fuzzer    = fuzzer.key
         run_index = index
       }
     ]
   ])
 
-  instance_map = { for instance in local.instances : instance.key => instance }
+  shard_map        = { for shard in local.shards : shard.shard_key => shard }
+  shard_count      = length(local.shards)
+  shards_json      = jsonencode([for shard in local.shards : { shard_key = shard.shard_key, fuzzer_key = shard.fuzzer, run_index = shard.run_index }])
+  shards_json_b64  = base64encode(local.shards_json)
+  fuzzer_keys_json = jsonencode(sort([for fuzzer in local.fuzzer_definitions : fuzzer.key]))
+  lock_owner       = var.lock_owner != "" ? var.lock_owner : "${local.run_id}-${local.benchmark_uuid}"
+  worker_instances = { for index in range(var.max_parallel_instances) : tostring(index) => { worker_index = index } }
+
+  benchmark_manifest = merge(
+    {
+      queue_mode             = true
+      scfuzzbench_commit     = var.scfuzzbench_commit
+      scfuzzbench_repo       = var.scfuzzbench_repo
+      target_repo_url        = var.target_repo_url
+      target_commit          = var.target_commit
+      benchmark_type         = var.benchmark_type
+      instance_type          = var.instance_type
+      instances_per_fuzzer   = var.instances_per_fuzzer
+      max_parallel_instances = var.max_parallel_instances
+      shard_count            = local.shard_count
+      shard_max_attempts     = var.shard_max_attempts
+      timeout_hours          = var.timeout_hours
+      aws_region             = var.aws_region
+      ubuntu_ami_id          = data.aws_ssm_parameter.ubuntu_ami.value
+      foundry_version        = var.foundry_version
+      foundry_git_repo       = var.foundry_git_repo
+      foundry_git_ref        = var.foundry_git_ref
+      echidna_version        = var.echidna_version
+      medusa_version         = var.medusa_version
+      fuzzer_keys            = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
+    },
+    contains(local.selected_fuzzer_keys, "echidna-symexec") ? {
+      bitwuzla_version = var.bitwuzla_version
+    } : {}
+  )
+
+  benchmark_manifest_json = jsonencode(local.benchmark_manifest)
+  benchmark_manifest_b64  = base64encode(local.benchmark_manifest_json)
+  benchmark_uuid          = md5(local.benchmark_manifest_json)
 }
 
 resource "random_id" "suffix" {
@@ -272,6 +283,8 @@ data "aws_iam_policy_document" "s3_access" {
   statement {
     actions = [
       "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
       "s3:AbortMultipartUpload",
       "s3:ListBucket",
       "s3:GetBucketLocation",
@@ -329,7 +342,7 @@ resource "aws_iam_instance_profile" "fuzzer" {
 }
 
 resource "aws_instance" "fuzzer" {
-  for_each = local.instance_map
+  for_each = local.worker_instances
 
   ami                         = data.aws_ssm_parameter.ubuntu_ami.value
   instance_type               = var.instance_type
@@ -341,11 +354,9 @@ resource "aws_instance" "fuzzer" {
   user_data_replace_on_change = true
 
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
-    fuzzer_key                   = each.value.fuzzer.key
-    shared_sh                    = file("${path.module}/../fuzzers/_shared/common.sh")
-    install_sh                   = file(each.value.fuzzer.install_path)
-    run_sh                       = file(each.value.fuzzer.run_path)
     aws_region                   = var.aws_region
+    scfuzzbench_repo             = var.scfuzzbench_repo
+    scfuzzbench_commit           = var.scfuzzbench_commit
     s3_bucket                    = local.bucket_name
     run_id                       = local.run_id
     benchmark_uuid               = local.benchmark_uuid
@@ -362,6 +373,18 @@ resource "aws_instance" "fuzzer" {
     bitwuzla_version             = var.bitwuzla_version
     git_token_ssm_parameter_name = var.git_token_ssm_parameter_name
     fuzzer_env                   = var.fuzzer_env
+    shards_json_b64              = local.shards_json_b64
+    fuzzer_keys_json             = local.fuzzer_keys_json
+    max_parallel_instances       = var.max_parallel_instances
+    shard_max_attempts           = var.shard_max_attempts
+    lock_owner                   = local.lock_owner
+    lock_key                     = var.lock_key
+    lock_lease_seconds           = var.lock_lease_seconds
+    lock_heartbeat_seconds       = var.lock_heartbeat_seconds
+    lock_acquire_timeout_seconds = var.lock_acquire_timeout_seconds
+    queue_poll_seconds           = var.queue_poll_seconds
+    queue_idle_polls_before_exit = var.queue_idle_polls_before_exit
+    worker_index                 = each.value.worker_index
   }))
 
   root_block_device {
@@ -374,8 +397,8 @@ resource "aws_instance" "fuzzer" {
   }
 
   tags = merge(local.tags, {
-    Name     = "${local.name_prefix}-${each.value.fuzzer.key}-${each.value.run_index}"
-    Fuzzer   = each.value.fuzzer.key
-    RunIndex = tostring(each.value.run_index)
+    Name        = "${local.name_prefix}-worker-${each.value.worker_index}"
+    WorkerIndex = tostring(each.value.worker_index)
+    QueueMode   = "s3"
   })
 }

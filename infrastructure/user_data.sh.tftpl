@@ -9,23 +9,58 @@ fi
 
 systemctl enable --now ssh || systemctl enable --now sshd || true
 
-mkdir -p /opt/scfuzzbench/fuzzers/${fuzzer_key}
+mkdir -p /opt/scfuzzbench/fuzzers /opt/scfuzzbench/scripts
 
-cat <<'SHARED' >/opt/scfuzzbench/common.sh
-${shared_sh}
-SHARED
+bootstrap_repo="${scfuzzbench_repo}"
+bootstrap_ref="${scfuzzbench_commit}"
+if [[ -z "$${bootstrap_ref}" ]]; then
+  bootstrap_ref="main"
+fi
 
-cat <<'INSTALL' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
-${install_sh}
-INSTALL
+tmp_bootstrap_dir=$(mktemp -d)
+archive_path="$${tmp_bootstrap_dir}/repo.tar.gz"
+archive_url="https://codeload.github.com/$${bootstrap_repo}/tar.gz/$${bootstrap_ref}"
+curl -fsSL "$${archive_url}" -o "$${archive_path}"
 
-cat <<'RUN' >/opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
-${run_sh}
-RUN
+topdir="$(tar -tzf "$${archive_path}" | sed -n '1p' | cut -d/ -f1)"
+tar -xzf "$${archive_path}" -C "$${tmp_bootstrap_dir}"
+repo_root="$${tmp_bootstrap_dir}/$${topdir}"
 
-chmod +x /opt/scfuzzbench/common.sh \
-  /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh \
-  /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh
+install -m 0755 "$${repo_root}/fuzzers/_shared/common.sh" /opt/scfuzzbench/common.sh
+install -m 0755 "$${repo_root}/scripts/s3_lock.py" /opt/scfuzzbench/scripts/s3_lock.py
+install -m 0755 "$${repo_root}/scripts/s3_queue_init.py" /opt/scfuzzbench/scripts/s3_queue_init.py
+install -m 0755 "$${repo_root}/scripts/s3_queue_worker.py" /opt/scfuzzbench/scripts/s3_queue_worker.py
+
+export SCFUZZBENCH_SRC_REPO_ROOT="$${repo_root}"
+export SCFUZZBENCH_FUZZER_KEYS_JSON='${fuzzer_keys_json}'
+python3 - <<'PY'
+import json
+import os
+import pathlib
+import shutil
+
+repo_root = pathlib.Path(os.environ["SCFUZZBENCH_SRC_REPO_ROOT"])
+dest_root = pathlib.Path("/opt/scfuzzbench/fuzzers")
+keys = json.loads(os.environ["SCFUZZBENCH_FUZZER_KEYS_JSON"])
+
+if not isinstance(keys, list) or not keys:
+    raise SystemExit("SCFUZZBENCH_FUZZER_KEYS_JSON must be a non-empty list")
+
+for key in keys:
+    if not isinstance(key, str) or not key:
+        raise SystemExit(f"invalid fuzzer key: {key!r}")
+    src_dir = repo_root / "fuzzers" / key
+    if not src_dir.is_dir():
+        raise SystemExit(f"missing fuzzer directory in bootstrap bundle: {src_dir}")
+    out_dir = dest_root / key
+    out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_dir / "install.sh", out_dir / "install.sh")
+    shutil.copy2(src_dir / "run.sh", out_dir / "run.sh")
+    (out_dir / "install.sh").chmod(0o755)
+    (out_dir / "run.sh").chmod(0o755)
+PY
+
+rm -rf "$${tmp_bootstrap_dir}"
 
 source /opt/scfuzzbench/common.sh
 install_shutdown_script
@@ -41,6 +76,18 @@ export SCFUZZBENCH_TIMEOUT_SECONDS="${timeout_seconds}"
 export SCFUZZBENCH_REPO_URL="${repo_url}"
 export SCFUZZBENCH_COMMIT="${repo_commit}"
 export SCFUZZBENCH_BENCHMARK_TYPE="${benchmark_type}"
+export SCFUZZBENCH_FUZZER_KEYS_JSON='${fuzzer_keys_json}'
+export SCFUZZBENCH_SHARDS_JSON_B64='${shards_json_b64}'
+export SCFUZZBENCH_MAX_PARALLEL_INSTANCES='${max_parallel_instances}'
+export SCFUZZBENCH_SHARD_MAX_ATTEMPTS='${shard_max_attempts}'
+export SCFUZZBENCH_LOCK_OWNER='${lock_owner}'
+export SCFUZZBENCH_LOCK_KEY='${lock_key}'
+export SCFUZZBENCH_LOCK_LEASE_SECONDS='${lock_lease_seconds}'
+export SCFUZZBENCH_LOCK_HEARTBEAT_SECONDS='${lock_heartbeat_seconds}'
+export SCFUZZBENCH_LOCK_ACQUIRE_TIMEOUT_SECONDS='${lock_acquire_timeout_seconds}'
+export SCFUZZBENCH_QUEUE_POLL_SECONDS='${queue_poll_seconds}'
+export SCFUZZBENCH_QUEUE_IDLE_POLLS_BEFORE_EXIT='${queue_idle_polls_before_exit}'
+export SCFUZZBENCH_WORKER_INDEX='${worker_index}'
 export FOUNDRY_VERSION="${foundry_version}"
 export FOUNDRY_GIT_REPO="${foundry_git_repo}"
 export FOUNDRY_GIT_REF="${foundry_git_ref}"
@@ -52,7 +99,16 @@ export SCFUZZBENCH_GIT_TOKEN_SSM_PARAMETER="${git_token_ssm_parameter_name}"
 export ${key}="${value}"
 %{ endfor ~}
 
-bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/install.sh
-bash /opt/scfuzzbench/fuzzers/${fuzzer_key}/run.sh || true
+for fuzzer_key in $(python3 - <<'PY'
+import json
+import os
+for key in json.loads(os.environ["SCFUZZBENCH_FUZZER_KEYS_JSON"]):
+    print(key)
+PY
+); do
+  bash "/opt/scfuzzbench/fuzzers/$${fuzzer_key}/install.sh"
+done
+
+python3 /opt/scfuzzbench/scripts/s3_queue_worker.py
 
 touch /opt/scfuzzbench/.bootstrapped

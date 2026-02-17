@@ -17,7 +17,7 @@ Core inputs are defined through Terraform vars and/or workflow dispatch:
 
 - Target: `target_repo_url`, `target_commit`
 - Mode: `benchmark_type` (`property` or `optimization`)
-- Infra: `instance_type`, `instances_per_fuzzer`, `timeout_hours`
+- Infra: `instance_type`, `instances_per_fuzzer`, `max_parallel_instances`, `timeout_hours`
 - Fuzzer set: `fuzzers` (or default all available)
 - Tool versions: `foundry_version`, `echidna_version`, `medusa_version`, plus optional `bitwuzla_version`
 
@@ -37,30 +37,31 @@ Terraform computes two IDs used across the pipeline:
 
 - `scfuzzbench_commit`, `target_repo_url`, `target_commit`
 - `benchmark_type`, `instance_type`, `instances_per_fuzzer`, `timeout_hours`
+- `max_parallel_instances`, `shard_max_attempts`
 - `aws_region`, `ubuntu_ami_id`
 - tool versions and selected `fuzzer_keys`
 
 This means changing any of those manifest fields changes `benchmark_uuid`.
 
-### 3) Provision equivalent runners
+### 3) Provision fixed worker pool
 
-Terraform provisions one EC2 instance per `(fuzzer, run_index)` pair:
+Terraform provisions a fixed worker pool (`max_parallel_instances`) and a shard queue:
 
-- Same AMI family for all (`ubuntu_ami_ssm_parameter`).
-- Same instance type and timeout budget for all fuzzers in a run.
+- One EC2 worker per pool slot (not per shard).
+- Shards are materialized in S3 under `runs/<run_id>/<benchmark_uuid>/queue/shards/`.
+- Same AMI family and instance type across the pool.
 - AZ auto-selected from offering data for the requested instance type (unless `availability_zone` is explicitly set).
-- `user_data_replace_on_change = true` so runner behavior changes trigger replacement.
+- `user_data_replace_on_change = true` so worker behavior changes trigger replacement.
 
-### 4) Execute benchmark on each runner
+### 4) Execute queue-driven benchmark on workers
 
 Runner lifecycle is defined in `infrastructure/user_data.sh.tftpl` and `fuzzers/_shared/common.sh`:
 
-- Install only that runner's fuzzer implementation (`fuzzers/<name>/install.sh`).
-- Clone target repository and checkout the pinned commit.
-- Build with `forge build`.
-- Run fuzzer command under `timeout` (`SCFUZZBENCH_TIMEOUT_SECONDS`).
-- Collect host metrics periodically into `runner_metrics.csv` (enabled by default).
-- Upload artifacts to S3, then self-shutdown.
+- Install all selected fuzzer implementations once per worker.
+- Acquire and heartbeat a global S3 lease lock.
+- Claim queued shards from S3 and execute shard-specific `run.sh` under timeout.
+- Persist shard transitions and worker heartbeats in S3 status/event objects.
+- Upload logs/corpus per shard attempt, then self-shutdown when run is terminal.
 
 Instances are intentionally one-shot:
 
@@ -77,28 +78,29 @@ Instances are intentionally one-shot:
 
 ### 6) Upload and index artifacts
 
-Each instance uploads:
+Workers upload:
 
 - Logs zip: `s3://<bucket>/logs/<run_id>/<benchmark_uuid>/i-...-<fuzzer>.zip`
 - Optional corpus zip: `s3://<bucket>/corpus/<run_id>/<benchmark_uuid>/i-...-<fuzzer>.zip`
 - Benchmark manifest:
   - `logs/<run_id>/<benchmark_uuid>/manifest.json`
   - `runs/<run_id>/<benchmark_uuid>/manifest.json` (timestamp-first index used by docs)
+- Queue status:
+  - `runs/<run_id>/<benchmark_uuid>/status/run.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/workers/<instance_id>.json`
+  - `runs/<run_id>/<benchmark_uuid>/status/events/<ts>-<instance>-<shard>-<status>.json`
+  - `runs/<run_id>/<benchmark_uuid>/dlq/<shard_key>-<attempt>.json`
 
 ## What Counts as a Complete Run
 
-Docs and release automation use the same completion rule:
+Docs and release automation use a shared completion helper:
 
-- `now >= run_id + (timeout_hours * 3600) + 3600`
-
-Notes:
-
-- `run_id` is interpreted as a Unix timestamp.
-- `timeout_hours` comes from `manifest.json` (default `24` if missing).
-- `3600` is a fixed 1-hour grace window.
+- Queue runs: terminal `runs/<run_id>/<benchmark_uuid>/status/run.json`
+- Legacy runs: `now >= run_id + (timeout_hours * 3600) + 3600`
 
 This rule is implemented in:
 
+- `scripts/run_completion.py`
 - `scripts/generate_docs_site.py`
 - `.github/workflows/benchmark-release.yml`
 

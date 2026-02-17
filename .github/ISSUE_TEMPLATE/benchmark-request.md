@@ -14,7 +14,7 @@ Notes:
 - Step `01` (`benchmark/01-pending`) is applied by this template at issue creation.
 - Step `02` (`benchmark/02-validated`) is applied by the bot after JSON validation passes.
 - Step `03` (`benchmark/03-approved`) is applied manually by a maintainer to start the run.
-- Limits: `instances_per_fuzzer` must be in `[1, 20]`, `timeout_hours` must be in `[0.25, 72]`.
+- Limits: `instances_per_fuzzer` must be in `[1, 20]`, `max_parallel_instances` must be in `[1, 50]`, `timeout_hours` must be in `[0.25, 72]`.
 
 ```json
 {
@@ -23,6 +23,7 @@ Notes:
   "benchmark_type": "property",
   "instance_type": "c6a.4xlarge",
   "instances_per_fuzzer": 4,
+  "max_parallel_instances": 3,
   "timeout_hours": 1,
   "fuzzers": ["echidna", "medusa", "foundry"],
   "foundry_version": "",

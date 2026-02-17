@@ -3,7 +3,7 @@
 This page is generated in CI from the S3 run index (`runs/<run_id>/<benchmark_uuid>/manifest.json`).
 
 ::: tip
-Only **complete** runs are shown (timeout + 1h grace).
+Only **complete** runs are shown (terminal run status for queue mode, with legacy timeout + 1h grace fallback).
 
 If you are previewing locally, run the generator first:
 

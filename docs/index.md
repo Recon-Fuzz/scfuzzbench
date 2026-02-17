@@ -18,7 +18,7 @@ features:
   - title: Timestamp-first runs
     details: Run IDs are Unix timestamps, so “latest” is always obvious just by listing prefixes.
   - title: Complete runs only
-    details: The site lists only complete runs (timeout plus a 1h grace period) to avoid partial results.
+    details: The site lists only complete runs (terminal run status for queue mode, with legacy timeout fallback).
   - title: Triage-friendly
     details: Complete runs missing analysis stay visible with warnings and raw-artifact links.
 ---

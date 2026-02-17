@@ -22,10 +22,15 @@ on:
         required: true
         default: c6a.8xlarge
       instances_per_fuzzer:
-        description: "Number of instances per fuzzer."
+        description: "Number of shards per fuzzer."
         required: true
         type: number
         default: 10
+      max_parallel_instances:
+        description: "Maximum parallel worker instances."
+        required: true
+        type: number
+        default: 3
       timeout_hours:
         description: "Timeout per fuzzer run (hours)."
         required: true
@@ -92,10 +97,15 @@ on:
         type: string
         default: c6a.8xlarge
       instances_per_fuzzer:
-        description: "Number of instances per fuzzer."
+        description: "Number of shards per fuzzer."
         required: false
         type: number
         default: 10
+      max_parallel_instances:
+        description: "Maximum parallel worker instances."
+        required: false
+        type: number
+        default: 3
       timeout_hours:
         description: "Timeout per fuzzer run (hours)."
         required: false
@@ -251,6 +261,7 @@ jobs:
           BENCHMARK_TYPE: ${{ inputs.benchmark_type }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          MAX_PARALLEL_INSTANCES: ${{ inputs.max_parallel_instances }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
@@ -349,6 +360,10 @@ jobs:
             fail "instances_per_fuzzer must be an integer in [1, 20]"
           fi
 
+          if [[ ! "${MAX_PARALLEL_INSTANCES}" =~ ^[0-9]+$ ]] || (( MAX_PARALLEL_INSTANCES < 1 )) || (( MAX_PARALLEL_INSTANCES > 50 )); then
+            fail "max_parallel_instances must be an integer in [1, 50]"
+          fi
+
           if [[ ! "${TIMEOUT_HOURS}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
             fail "timeout_hours must be a number"
           fi
@@ -382,6 +397,22 @@ jobs:
               if not isinstance(v, str) or not key_re.match(v):
                   raise SystemExit(f"Invalid fuzzer key: {v!r}")
           PY
+
+          fuzzer_count=$(python3 - <<'PY'
+          import json
+          import os
+
+          raw = os.environ.get("FUZZERS_JSON", "").strip()
+          if not raw:
+              raw = '["echidna","medusa","foundry"]'
+          obj = json.loads(raw)
+          print(len(obj))
+          PY
+          )
+          total_shards=$((INSTANCES_PER_FUZZER * fuzzer_count))
+          if (( MAX_PARALLEL_INSTANCES > total_shards )); then
+            fail "max_parallel_instances must be <= total requested shards (${total_shards})"
+          fi
 
           if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
             require_safe "git_token_ssm_parameter_name" "${GIT_TOKEN_SSM_PARAMETER_NAME}"
@@ -436,6 +467,7 @@ jobs:
           BENCHMARK_TYPE: ${{ inputs.benchmark_type }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
+          MAX_PARALLEL_INSTANCES: ${{ inputs.max_parallel_instances }}
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
@@ -450,10 +482,34 @@ jobs:
         run: |
           set -euo pipefail
           run_id=$(date +%s)
+          lock_owner="gh-${GITHUB_RUN_ID}-${run_id}"
           fuzzers="${FUZZERS_JSON:-}"
           if [[ -z "${fuzzers}" ]]; then
             fuzzers='["echidna","medusa","foundry"]'
           fi
+
+          python3 scripts/s3_lock.py acquire \
+            --bucket "${SCFUZZBENCH_BUCKET}" \
+            --owner "${lock_owner}" \
+            --run-id "${run_id}" \
+            --benchmark-uuid "pending" \
+            --lease-seconds 14400 \
+            --acquire-timeout-seconds 0 \
+            --poll-seconds 10.0 >/tmp/scfuzzbench-lock-acquire.json
+          lock_acquired=1
+
+          cleanup_on_error() {
+            local exit_code=$?
+            trap - EXIT
+            if [[ "${exit_code}" -ne 0 && "${lock_acquired}" -eq 1 ]]; then
+              python3 scripts/s3_lock.py release \
+                --bucket "${SCFUZZBENCH_BUCKET}" \
+                --owner "${lock_owner}" >/dev/null 2>&1 || true
+            fi
+            exit "${exit_code}"
+          }
+          trap cleanup_on_error EXIT
+
           tf_args=(
             -var "aws_region=${AWS_REGION}"
             -var "existing_bucket_name=${SCFUZZBENCH_BUCKET}"
@@ -462,10 +518,13 @@ jobs:
             -var "benchmark_type=${BENCHMARK_TYPE}"
             -var "instance_type=${INSTANCE_TYPE}"
             -var "instances_per_fuzzer=${INSTANCES_PER_FUZZER}"
+            -var "max_parallel_instances=${MAX_PARALLEL_INSTANCES}"
             -var "timeout_hours=${TIMEOUT_HOURS}"
             -var "fuzzers=${fuzzers}"
             -var "run_id=${run_id}"
+            -var "lock_owner=${lock_owner}"
             -var "scfuzzbench_commit=${GITHUB_SHA}"
+            -var "scfuzzbench_repo=${GITHUB_REPOSITORY}"
           )
 
           if [[ -n "${FOUNDRY_VERSION}" ]]; then
@@ -509,7 +568,10 @@ jobs:
           fi
 
           terraform -chdir=infrastructure apply -auto-approve "${tf_args[@]}"
+          lock_acquired=0
+          trap - EXIT
           echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "lock_owner=${lock_owner}" >> "${GITHUB_OUTPUT}"
 
       - name: Collect Terraform outputs
         id: tf_outputs
@@ -535,4 +597,6 @@ jobs:
             echo ""
             echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
             echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
+            echo "- Shards per fuzzer: ${{ inputs.instances_per_fuzzer }}"
+            echo "- Max parallel instances: ${{ inputs.max_parallel_instances }}"
           } >> "${GITHUB_STEP_SUMMARY}"

@@ -35,6 +35,21 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
       SCFUZZBENCH_BUCKET: ${{ secrets.SCFUZZBENCH_BUCKET }}
     steps:
+      - name: Checkout (tarball)
+        timeout-minutes: 5
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="https://codeload.github.com/${REPO}/tar.gz/${SHA}"
+          curl -fsSL "${url}" -o repo.tar.gz
+          topdir="$(tar -tzf repo.tar.gz | sed -n '1p' | cut -d/ -f1)"
+          tar -xzf repo.tar.gz
+          shopt -s dotglob
+          mv "${topdir}"/* .
+          rm -rf "${topdir}" repo.tar.gz
+
       - name: Ensure AWS credentials are configured
         run: |
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
@@ -91,70 +106,24 @@ jobs:
           fi
 
           matrix=$(python3 - <<'PY'
-          import json
           import os
           import subprocess
-          import time
 
           bucket = os.environ["SCFUZZBENCH_BUCKET"]
-          grace = int(os.environ.get("GRACE_SECONDS", "3600"))
-          now = int(time.time())
-
-          def aws(*args: str) -> str:
-              return subprocess.check_output(["aws", *args], text=True)
-
-          def list_prefixes(prefix: str) -> list[str]:
-              data = json.loads(
-                  aws(
-                      "s3api",
-                      "list-objects-v2",
-                      "--bucket",
-                      bucket,
-                      "--prefix",
-                      prefix,
-                      "--delimiter",
-                      "/",
-                      "--output",
-                      "json",
-                  )
-              )
-              return [entry["Prefix"] for entry in data.get("CommonPrefixes", [])]
-
-          runs: list[dict] = []
-          for run_prefix in list_prefixes("logs/"):
-              parts = run_prefix.strip("/").split("/")
-              if len(parts) < 2:
-                  continue
-              run_id = parts[1]
-              for bench_prefix in list_prefixes(f"logs/{run_id}/"):
-                  bench_parts = bench_prefix.strip("/").split("/")
-                  if len(bench_parts) < 3:
-                      continue
-                  benchmark_uuid = bench_parts[2]
-                  manifest_key = f"logs/{run_id}/{benchmark_uuid}/manifest.json"
-                  try:
-                      manifest_raw = aws("s3", "cp", f"s3://{bucket}/{manifest_key}", "-")
-                      manifest = json.loads(manifest_raw)
-                  except Exception:
-                      continue
-                  try:
-                      timeout_hours = float(manifest.get("timeout_hours", 24))
-                  except Exception:
-                      timeout_hours = 24.0
-                  try:
-                      run_start = int(run_id)
-                  except ValueError:
-                      continue
-                  if now >= run_start + int(timeout_hours * 3600) + grace:
-                      runs.append(
-                          {
-                              "benchmark_uuid": benchmark_uuid,
-                              "run_id": run_id,
-                              "timeout_hours": timeout_hours,
-                          }
-                      )
-
-          print(json.dumps({"include": runs}, separators=(",", ":")))
+          grace = os.environ.get("GRACE_SECONDS", "3600")
+          out = subprocess.check_output(
+              [
+                  "python3",
+                  "scripts/run_completion.py",
+                  "discover",
+                  "--bucket",
+                  bucket,
+                  "--grace-seconds",
+                  grace,
+              ],
+              text=True,
+          )
+          print(out.strip())
           PY
           )
 

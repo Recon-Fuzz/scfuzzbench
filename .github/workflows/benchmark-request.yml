@@ -23,6 +23,7 @@ jobs:
       benchmark_type: ${{ steps.prepare.outputs.benchmark_type }}
       instance_type: ${{ steps.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ steps.prepare.outputs.instances_per_fuzzer }}
+      max_parallel_instances: ${{ steps.prepare.outputs.max_parallel_instances }}
       timeout_hours: ${{ steps.prepare.outputs.timeout_hours }}
       fuzzers_json: ${{ steps.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ steps.prepare.outputs.foundry_version }}
@@ -246,6 +247,8 @@ jobs:
 
             const inst = mustNumber(payload, "instances_per_fuzzer", { required: true, min: 1, max: 20, integer: true });
             if (!inst.ok) errors.push(inst.message);
+            const maxParallel = mustNumber(payload, "max_parallel_instances", { required: false, min: 1, max: 50, integer: true });
+            if (!maxParallel.ok) errors.push(maxParallel.message);
 
             const hours = mustNumber(payload, "timeout_hours", { required: true, min: 0.25, max: 72, integer: false });
             if (!hours.ok) errors.push(hours.message);
@@ -279,6 +282,12 @@ jobs:
               }
             }
             const fuzzersJson = JSON.stringify(fuzzers);
+            const maxParallelValue = maxParallel.ok && maxParallel.value !== null
+              ? maxParallel.value
+              : Math.min(3, inst.ok ? inst.value : 3);
+            if (inst.ok && maxParallelValue > (inst.value * fuzzers.length)) {
+              errors.push(`max_parallel_instances must be <= total requested shards (${inst.value * fuzzers.length})`);
+            }
 
             const githubRepoUrlRe = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/;
             if (url.ok) {
@@ -401,6 +410,7 @@ jobs:
                   `- Type: \`${bt}\``,
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Max parallel instances: \`${maxParallelValue}\``,
                   `- Timeout hours: \`${hours.value}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
                   "",
@@ -425,6 +435,7 @@ jobs:
                   `- Type: \`${bt}\``,
                   `- Instance type: \`${itype.value}\``,
                   `- Instances per fuzzer: \`${inst.value}\``,
+                  `- Max parallel instances: \`${maxParallelValue}\``,
                   `- Timeout hours: \`${hours.value}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
                 ].join("\n")
@@ -437,6 +448,7 @@ jobs:
               core.setOutput("benchmark_type", bt);
               core.setOutput("instance_type", itype.value);
               core.setOutput("instances_per_fuzzer", String(inst.value));
+              core.setOutput("max_parallel_instances", String(maxParallelValue));
               core.setOutput("timeout_hours", String(hours.value));
               core.setOutput("fuzzers_json", fuzzersJson);
 
@@ -462,6 +474,7 @@ jobs:
       benchmark_type: ${{ needs.prepare.outputs.benchmark_type }}
       instance_type: ${{ needs.prepare.outputs.instance_type }}
       instances_per_fuzzer: ${{ fromJSON(needs.prepare.outputs.instances_per_fuzzer) }}
+      max_parallel_instances: ${{ fromJSON(needs.prepare.outputs.max_parallel_instances) }}
       timeout_hours: ${{ fromJSON(needs.prepare.outputs.timeout_hours) }}
       fuzzers_json: ${{ needs.prepare.outputs.fuzzers_json }}
       foundry_version: ${{ needs.prepare.outputs.foundry_version }}
@@ -560,7 +573,7 @@ jobs:
                 "Docs:",
                 `- ${docsUrl}`,
                 "",
-                "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
+                "_Note: the docs site only shows **complete** runs (terminal run status, with legacy timeout fallback)._",
               ].join("\n")
             );
 

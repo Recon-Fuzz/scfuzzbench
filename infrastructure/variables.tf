@@ -36,8 +36,30 @@ variable "availability_zone" {
 
 variable "instances_per_fuzzer" {
   type        = number
-  description = "Number of parallel instances per fuzzer."
+  description = "Number of queued shards per fuzzer."
   default     = 10
+}
+
+variable "max_parallel_instances" {
+  type        = number
+  description = "Maximum number of benchmark workers running in parallel."
+  default     = 3
+
+  validation {
+    condition     = var.max_parallel_instances >= 1 && var.max_parallel_instances <= 50
+    error_message = "max_parallel_instances must be in [1, 50]."
+  }
+}
+
+variable "shard_max_attempts" {
+  type        = number
+  description = "Maximum attempts for each shard before terminal failure."
+  default     = 3
+
+  validation {
+    condition     = var.shard_max_attempts >= 1 && var.shard_max_attempts <= 10
+    error_message = "shard_max_attempts must be in [1, 10]."
+  }
 }
 
 variable "timeout_hours" {
@@ -62,6 +84,12 @@ variable "scfuzzbench_commit" {
   type        = string
   description = "Commit hash for the scfuzzbench repo (used in benchmark UUID)."
   default     = ""
+}
+
+variable "scfuzzbench_repo" {
+  type        = string
+  description = "GitHub owner/repo used by worker bootstrap to fetch scripts."
+  default     = "Recon-Fuzz/scfuzzbench"
 }
 
 variable "benchmark_type" {
@@ -153,6 +181,68 @@ variable "run_id" {
   type        = string
   description = "Run identifier (defaults to unix timestamp at apply time)."
   default     = ""
+}
+
+variable "lock_owner" {
+  type        = string
+  description = "Owner token for the global S3 benchmark lock."
+  default     = ""
+}
+
+variable "lock_key" {
+  type        = string
+  description = "S3 object key used for the global benchmark lock."
+  default     = "runs/_control/global-lock.json"
+}
+
+variable "lock_lease_seconds" {
+  type        = number
+  description = "Lease duration for the global S3 lock."
+  default     = 900
+
+  validation {
+    condition     = var.lock_lease_seconds >= 60 && var.lock_lease_seconds <= 86400
+    error_message = "lock_lease_seconds must be in [60, 86400]."
+  }
+}
+
+variable "lock_heartbeat_seconds" {
+  type        = number
+  description = "Heartbeat interval used by workers to refresh the S3 lock."
+  default     = 60
+
+  validation {
+    condition     = var.lock_heartbeat_seconds >= 15 && var.lock_heartbeat_seconds <= 3600
+    error_message = "lock_heartbeat_seconds must be in [15, 3600]."
+  }
+}
+
+variable "lock_acquire_timeout_seconds" {
+  type        = number
+  description = "Lock acquisition timeout for workers. 0 means wait indefinitely."
+  default     = 0
+}
+
+variable "queue_poll_seconds" {
+  type        = number
+  description = "Polling interval for S3 queue scans."
+  default     = 15
+
+  validation {
+    condition     = var.queue_poll_seconds >= 5 && var.queue_poll_seconds <= 300
+    error_message = "queue_poll_seconds must be in [5, 300]."
+  }
+}
+
+variable "queue_idle_polls_before_exit" {
+  type        = number
+  description = "Number of idle polls before workers re-check terminal run status."
+  default     = 6
+
+  validation {
+    condition     = var.queue_idle_polls_before_exit >= 1 && var.queue_idle_polls_before_exit <= 120
+    error_message = "queue_idle_polls_before_exit must be in [1, 120]."
+  }
 }
 
 variable "tags" {

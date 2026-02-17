@@ -9,6 +9,7 @@ SCFUZZBENCH_BENCHMARK_TYPE=${SCFUZZBENCH_BENCHMARK_TYPE:-property}
 SCFUZZBENCH_BENCHMARK_UUID=${SCFUZZBENCH_BENCHMARK_UUID:-}
 SCFUZZBENCH_BENCHMARK_MANIFEST_B64=${SCFUZZBENCH_BENCHMARK_MANIFEST_B64:-}
 SCFUZZBENCH_PROPERTIES_PATH=${SCFUZZBENCH_PROPERTIES_PATH:-}
+SCFUZZBENCH_QUEUE_MODE=${SCFUZZBENCH_QUEUE_MODE:-0}
 SCFUZZBENCH_RUNNER_METRICS=${SCFUZZBENCH_RUNNER_METRICS:-1}
 SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS=${SCFUZZBENCH_RUNNER_METRICS_INTERVAL_SECONDS:-5}
 
@@ -18,6 +19,18 @@ SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS=${SCFUZZBENCH_AWS_CREDS_REFRESH_SECONDS:-3
 log() {
   # Use stderr so command substitutions can safely capture stdout.
   echo "[$(date -Is)] $*" >&2
+}
+
+queue_mode_enabled() {
+  local flag="${SCFUZZBENCH_QUEUE_MODE:-0}"
+  case "${flag}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 retry_cmd() {
@@ -296,6 +309,10 @@ finalize_run() {
     else
       log "Skipping upload in finalize; missing S3 bucket, run id, or fuzzer label."
     fi
+  fi
+  if queue_mode_enabled; then
+    log "Queue mode enabled; skipping automatic instance shutdown."
+    return ${exit_code}
   fi
   shutdown_instance
   return ${exit_code}
@@ -816,6 +833,16 @@ upload_results() {
   cache_instance_id || true
   local instance_id="${SCFUZZBENCH_INSTANCE_ID:-unknown}"
   local base_name="${instance_id}-${SCFUZZBENCH_FUZZER_LABEL}"
+  if [[ -n "${SCFUZZBENCH_SHARD_KEY:-}" ]]; then
+    local shard_fragment
+    shard_fragment=$(echo "${SCFUZZBENCH_SHARD_KEY}" | tr -c '[:alnum:]._-:' '_')
+    base_name="${base_name}-${shard_fragment}"
+  fi
+  if [[ -n "${SCFUZZBENCH_SHARD_ATTEMPT:-}" ]]; then
+    local attempt_fragment
+    attempt_fragment=$(echo "${SCFUZZBENCH_SHARD_ATTEMPT}" | tr -c '[:alnum:]._-:' '_')
+    base_name="${base_name}-a${attempt_fragment}"
+  fi
   local upload_dir="${SCFUZZBENCH_ROOT}/upload"
   mkdir -p "${upload_dir}"
   local log_zip="${upload_dir}/logs-${base_name}.zip"

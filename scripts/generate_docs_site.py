@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from run_completion import check_run_completion
 
 
 RUN_MANIFEST_RE = re.compile(r"^runs/([0-9]+)/([0-9a-f]{32})/manifest\.json$")
@@ -342,10 +343,18 @@ def main() -> int:
             # Skip malformed or missing manifests.
             continue
 
-        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
-        deadline = run_id + int(timeout_hours * 3600) + int(args.grace_seconds)
-        if now < deadline:
+        completion = check_run_completion(
+            bucket=bucket,
+            run_id=str(run_id),
+            benchmark_uuid=benchmark_uuid,
+            grace_seconds=int(args.grace_seconds),
+            profile=profile,
+            now=now,
+        )
+        if not completion.complete:
             continue
+
+        timeout_hours = safe_float(manifest.get("timeout_hours", 24), 24.0)
 
         analysis_prefix = f"analysis/{benchmark_uuid}/{run_id}"
         legacy_prefix = f"reports/{benchmark_uuid}/{run_id}"
@@ -376,7 +385,7 @@ def main() -> int:
         )
 
     complete_runs.sort(key=lambda r: (r.run_id, r.benchmark_uuid), reverse=True)
-    print(f"Found {len(complete_runs)} complete runs (timeout + grace)")
+    print(f"Found {len(complete_runs)} complete runs (status-aware)")
 
     # Build compile-time EC2 pricing table for the Start Benchmark page.
     pricing_instance_types = {
