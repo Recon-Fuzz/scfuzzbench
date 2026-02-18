@@ -189,11 +189,6 @@ variable "fuzzers" {
 
 variable "fuzzer_env" {
   type        = map(string)
-  description = "Extra environment variables passed to fuzzer run scripts."
-  default = {
-    ECHIDNA_CONFIG     = "echidna.yaml"
-    ECHIDNA_TARGET     = "test/recon/CryticTester.sol"
-    ECHIDNA_CONTRACT   = "CryticTester"
-    ECHIDNA_EXTRA_ARGS = "--test-limit 1000000000"
-  }
+  description = "Fuzzer environment variable overrides passed to fuzzer run scripts."
+  default     = {}
 }

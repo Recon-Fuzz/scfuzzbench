@@ -36,6 +36,14 @@ locals {
   benchmark_manifest_b64  = base64encode(local.benchmark_manifest_json)
   benchmark_uuid          = md5(local.benchmark_manifest_json)
 
+  default_fuzzer_env = {
+    ECHIDNA_CONFIG     = "echidna.yaml"
+    ECHIDNA_TARGET     = "tests/recon/CryticTester.sol"
+    ECHIDNA_CONTRACT   = "CryticTester"
+    ECHIDNA_EXTRA_ARGS = "--test-limit 1000000000"
+  }
+  merged_fuzzer_env = merge(local.default_fuzzer_env, var.fuzzer_env)
+
   base_fuzzer_definitions = [
     {
       key          = "echidna"
@@ -361,7 +369,7 @@ resource "aws_instance" "fuzzer" {
     medusa_version               = var.medusa_version
     bitwuzla_version             = var.bitwuzla_version
     git_token_ssm_parameter_name = var.git_token_ssm_parameter_name
-    fuzzer_env                   = var.fuzzer_env
+    fuzzer_env                   = local.merged_fuzzer_env
   }))
 
   root_block_device {
