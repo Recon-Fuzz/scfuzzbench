@@ -46,7 +46,7 @@ on:
       foundry_git_ref:
         description: "Optional Foundry git ref (branch/tag/commit)."
         required: false
-        default: "aviggiano-pr-12587"
+        default: "master"
       echidna_version:
         description: "Override Echidna version (optional)."
         required: false
@@ -120,7 +120,7 @@ on:
         description: "Optional Foundry git ref (branch/tag/commit)."
         required: false
         type: string
-        default: "aviggiano-pr-12587"
+        default: "master"
       echidna_version:
         description: "Override Echidna version (optional)."
         required: false

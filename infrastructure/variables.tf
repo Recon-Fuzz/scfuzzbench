@@ -85,7 +85,7 @@ variable "foundry_git_repo" {
 variable "foundry_git_ref" {
   type        = string
   description = "Optional git ref (branch, tag, or commit) for Foundry repo."
-  default     = "aviggiano-pr-12587"
+  default     = "master"
 }
 
 variable "echidna_version" {

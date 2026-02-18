@@ -97,7 +97,7 @@ export TF_VAR_instances_per_fuzzer=4
 export TF_VAR_fuzzers='["echidna","medusa","foundry"]'
 export TF_VAR_git_token_ssm_parameter_name="/scfuzzbench/recon/github_token"
 export TF_VAR_foundry_git_repo="https://github.com/aviggiano/foundry"
-export TF_VAR_foundry_git_ref="aviggiano-pr-12587"
+export TF_VAR_foundry_git_ref="master"
 ```
 
 ## Re-run a benchmark
