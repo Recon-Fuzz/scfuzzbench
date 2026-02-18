@@ -61,7 +61,7 @@ const participatingFuzzerKeys = computed(() => {
 // Advanced / optional overrides.
 const foundryVersion = ref("");
 const foundryGitRepo = ref("https://github.com/aviggiano/foundry");
-const foundryGitRef = ref("master");
+const foundryGitRef = ref("aviggiano-pr-12587");
 
 const echidnaVersion = ref("");
 const medusaVersion = ref("");

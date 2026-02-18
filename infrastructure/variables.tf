@@ -79,13 +79,13 @@ variable "foundry_version" {
 variable "foundry_git_repo" {
   type        = string
   description = "Optional git repository to build Foundry from."
-  default     = ""
+  default     = "https://github.com/aviggiano/foundry"
 }
 
 variable "foundry_git_ref" {
   type        = string
   description = "Optional git ref (branch, tag, or commit) for Foundry repo."
-  default     = ""
+  default     = "aviggiano-pr-12587"
 }
 
 variable "echidna_version" {

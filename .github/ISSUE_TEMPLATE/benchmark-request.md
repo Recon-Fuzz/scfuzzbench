@@ -27,7 +27,7 @@ Notes:
   "fuzzers": ["echidna", "medusa", "foundry"],
   "foundry_version": "",
   "foundry_git_repo": "https://github.com/aviggiano/foundry",
-  "foundry_git_ref": "master",
+  "foundry_git_ref": "aviggiano-pr-12587",
   "echidna_version": "",
   "medusa_version": "",
   "bitwuzla_version": "",
