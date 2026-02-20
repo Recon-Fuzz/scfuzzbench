@@ -135,14 +135,15 @@ def parse_foundry_log(
                 # not time since the first failure.
                 first_ts = ts_value
             failed = payload.get("failed")
-            if failed is not None:
-                try:
-                    failed_value = int(failed)
-                except (TypeError, ValueError):
-                    failed_value = 0
-                if failed_value <= 0:
-                    continue
-            elif "assertion_failure" not in invariant:
+            if failed is None:
+                # Foundry metric updates include invariant names but are not failures.
+                # Only count events that explicitly report failed > 0.
+                continue
+            try:
+                failed_value = int(failed)
+            except (TypeError, ValueError):
+                failed_value = 0
+            if failed_value <= 0:
                 continue
             elapsed = ts_value - first_ts
             if invariant in seen:
