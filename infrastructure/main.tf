@@ -38,7 +38,7 @@ locals {
 
   default_fuzzer_env = {
     ECHIDNA_CONFIG     = "echidna.yaml"
-    ECHIDNA_TARGET     = "tests/recon/CryticTester.sol"
+    ECHIDNA_TARGET     = "test/recon/CryticTester.sol"
     ECHIDNA_CONTRACT   = "CryticTester"
     ECHIDNA_EXTRA_ARGS = "--test-limit 1000000000"
   }
