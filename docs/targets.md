@@ -13,6 +13,17 @@ It includes lessons learned from:
 - `aave-v4-scfuzzbench` (`v0.5.6-recon`)
 - `superform-v2-periphery-scfuzzbench` (vulnerable commit + recon harness backport)
 
+## Currently conforming targets
+
+These targets currently conform to `scfuzzbench` expectations:
+
+1. `aave-v4`:
+   - https://github.com/Recon-Fuzz/aave-v4-scfuzzbench
+2. `superform-v2-periphery`:
+   - https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench
+3. `scfuzzbench-canary`:
+   - https://github.com/Recon-Fuzz/scfuzzbench-canary
+
 
 ## What "done" looks like
 
