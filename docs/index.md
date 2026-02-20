@@ -12,6 +12,9 @@ hero:
       text: Start benchmark
       link: /start
     - theme: alt
+      text: Submit target request
+      link: /submit-target
+    - theme: alt
       text: Methodology
       link: /methodology
 features:

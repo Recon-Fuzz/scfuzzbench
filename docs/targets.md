@@ -13,6 +13,16 @@ It includes lessons learned from:
 - `aave-v4-scfuzzbench` (`v0.5.6-recon`)
 - `superform-v2-periphery-scfuzzbench` (vulnerable commit + recon harness backport)
 
+## Submit A Target Request
+
+Use the wizard at [`/submit-target`](/submit-target) to create a handoff issue for a new target.
+
+The generated issue includes:
+
+1. The target input JSON
+2. A copy/paste agent handoff prompt
+3. References to this playbook (`/targets` and `docs/targets.md`)
+
 ## Currently conforming targets
 
 These targets currently conform to `scfuzzbench` expectations:

@@ -2,6 +2,8 @@
 
 This page creates a **benchmark request** issue in GitHub.
 
+Need a new target first? Use [`/submit-target`](/submit-target) to request target onboarding.
+
 The request moves through GitHub labels:
 
 - `benchmark/01-pending`: added by the issue template on creation.
