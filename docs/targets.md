@@ -156,6 +156,10 @@ Also ensure `setUp()` routes fuzzing to handlers:
 1. Do not use `compilation.platformConfig.target = "."` when forcing `solc` via crytic-compile.
 2. Use a concrete file target, usually:
    - `test/recon/CryticTester.sol`
+3. Ensure gas limits are high enough for this target's call graph.
+4. If Medusa crashes with `insufficient gas for floor data gas cost`, increase:
+   - `fuzzing.transactionGasLimit`
+   - `fuzzing.blockGasLimit`
 
 Example:
 
@@ -166,6 +170,13 @@ Example:
     "target": "test/recon/CryticTester.sol"
   }
 }
+```
+
+Gas-limit example used to fix Superform:
+
+```json
+"blockGasLimit": 300000000,
+"transactionGasLimit": 30000000
 ```
 
 
@@ -222,6 +233,7 @@ For known non-conformant target only, example override:
 3. Medusa compile/start smoke test
 4. Foundry invariant smoke test
 5. 10-minute trials for all 3 fuzzers
+6. `CryticToFoundry.sol` contains no `test_*` reproducer/unit-test functions
 
 Suggested 10-minute commands:
 
@@ -275,6 +287,15 @@ Fix:
 1. Set `medusa.json` compilation target to concrete file:
    - `test/recon/CryticTester.sol`
 
+### Medusa error
+
+`insufficient gas for floor data gas cost: have X, want Y`
+
+Fix:
+
+1. Raise `transactionGasLimit` and `blockGasLimit` in `medusa.json`.
+2. Re-run a short Medusa smoke trial and confirm it reaches fuzzing metrics and/or finds invariant failures.
+
 ### Foundry assertion failures not surfaced as expected
 
 Fix:
@@ -282,6 +303,21 @@ Fix:
 1. Ensure reasons start with `!!!`
 2. Ensure per-assertion `invariant_assertion_failure_*` functions exist
 3. Ensure assert helpers are overridden and recording failures
+
+### Foundry appears unrealistically fast and finds all bugs immediately
+
+Likely cause:
+
+1. `CryticToFoundry.sol` still contains hardcoded `test_*` reproducer/unit tests.
+2. `scfuzzbench` runs `forge test --mc CryticToFoundry`, so those tests execute and bias benchmark results.
+
+Fix:
+
+1. Keep `CryticToFoundry` as an invariant harness only.
+2. Remove all `test_*` reproducer functions from benchmark branches.
+3. Verify with:
+   - `forge test --match-contract CryticToFoundry --list`
+   - ensure output contains only `invariant_*` (and optional `invariant_noop`).
 
 
 ## PR template requirements (`dev-recon -> dev`)
@@ -304,6 +340,8 @@ PR description should include:
 3. Medusa is sensitive to crytic compilation target when forcing `solc`; use explicit file target.
 4. Foundry assertion visibility requires explicit shim + per-assertion invariants for reliable benchmark reporting.
 5. Benchmark output showing zero bugs for a fuzzer can be a setup failure, not tool weakness. Always inspect raw logs.
+6. Medusa can fail after successful compilation if gas caps are too low; watch for `floor data gas cost` errors.
+7. Foundry benchmark targets must not include unit-style reproducers in `CryticToFoundry`; they invalidate performance/coverage comparability.
 
 
 ## Reference fixes applied during this effort
@@ -312,6 +350,8 @@ PR description should include:
    - commit `2ff7461`
 2. `superform-v2-periphery-scfuzzbench` Medusa target fix:
    - commit `7be8d5ec`
+3. `superform-v2-periphery-scfuzzbench` Medusa gas-limit + Foundry harness cleanup:
+   - commit `79cc7ba9`
 
 
 ## Agent invocation template (copy/paste)
@@ -319,7 +359,7 @@ PR description should include:
 Use this exact prompt format when delegating target onboarding to an agent:
 
 ```text
-Read ADD_TARGET.md and execute it end-to-end for the following target.
+Read docs/targets.md and execute it end-to-end for the following target.
 
 Inputs:
 - upstream_target_repo_url: https://github.com/<org>/<repo>
