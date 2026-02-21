@@ -37,6 +37,7 @@ export default defineConfig({
       { text: "Submit target request", link: "/submit-target" },
       { text: "Targets", link: "/targets" },
       { text: "Methodology", link: "/methodology" },
+      { text: "Operations", link: "/operations" },
       { text: "GitHub", link: "https://github.com/Recon-Fuzz/scfuzzbench" },
     ],
 
@@ -51,6 +52,7 @@ export default defineConfig({
           { text: "Submit Target Request", link: "/submit-target" },
           { text: "Targets", link: "/targets" },
           { text: "Methodology", link: "/methodology" },
+          { text: "Operations", link: "/operations" },
         ],
       },
     ],
