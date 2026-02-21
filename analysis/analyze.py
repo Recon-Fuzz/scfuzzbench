@@ -139,10 +139,6 @@ def parse_foundry_log(
                                 first_ts = ts_value
 
                             failed = payload.get("failed")
-                            if failed is None:
-                                metrics = payload.get("metrics")
-                                if isinstance(metrics, dict):
-                                    failed = metrics.get("failed")
                             try:
                                 failed_value = int(failed) if failed is not None else 0
                             except (TypeError, ValueError):

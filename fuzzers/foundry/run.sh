@@ -62,7 +62,7 @@ start_failure_watcher() {
           continue
         fi
         ts=$(date +%s)
-        printf '{"timestamp":%s,"invariant":"%s","failed":1,"metrics":{"cumulative_edges_seen":0,"cumulative_features_seen":0,"corpus_count":0,"favored_items":0}}\n' "${ts}" "${invariant_name}" >> "${out_log}"
+        printf '{"timestamp":%s,"invariant":"%s","failed":1}\n' "${ts}" "${invariant_name}" >> "${out_log}"
       done < <(find "${failure_root}" -type f -print0 2>/dev/null)
     }
 
