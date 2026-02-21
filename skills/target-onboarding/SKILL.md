@@ -29,7 +29,6 @@ Required:
 
 Optional:
 - requester notes and constraints
-- `create_tracking_issue`: default `false`; only create a `Recon-Fuzz/scfuzzbench` tracking issue when explicitly requested by the user
 
 ## Non-negotiable constraints
 
@@ -41,23 +40,14 @@ Optional:
 
 ## Workflow
 
-### 1) Optional: create/update a target tracking issue
-
-Do this only if the user explicitly asks for it.
-
-The issue body must include:
-- JSON payload with all required inputs
-- clear handoff prompt referencing this skill file
-- requester notes
-
-### 2) Create target repo baseline branch
+### 1) Create target repo baseline branch
 
 In destination repo:
 1. Checkout vulnerable baseline commit.
 2. Create `base_branch_name` (default `dev`) at that commit.
 3. Push and set as baseline/default as needed.
 
-### 3) Create recon branch and port harness
+### 2) Create recon branch and port harness
 
 1. Create `recon_branch_name` from base branch (default `dev-recon` from `dev`).
 2. Port full recon setup from source ref.
@@ -69,7 +59,7 @@ Minimum files/directories to port:
 4. `medusa.json`
 5. Required helpers/remappings/scripts used by recon tests
 
-### 4) Ensure benchmark-compatible config
+### 3) Ensure benchmark-compatible config
 
 `foundry.toml` invariant section must include benchmark-compatible values:
 
@@ -85,7 +75,7 @@ continuous_run = true
 corpus_dir = "corpus/foundry"
 ```
 
-### 5) Foundry assertion visibility shim
+### 4) Foundry assertion visibility shim
 
 Because assertion failures can be hidden in invariant output, enforce:
 1. assertion reason strings prefixed with `!!!`
@@ -93,7 +83,7 @@ Because assertion failures can be hidden in invariant output, enforce:
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
 
-### 6) Fuzzer-specific path rules
+### 5) Fuzzer-specific path rules
 
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
@@ -115,7 +105,7 @@ Example:
 }
 ```
 
-### 7) Local validation before PR
+### 6) Local validation before PR
 
 Run all:
 1. `forge test --match-contract CryticToFoundry --list`
@@ -144,7 +134,7 @@ Debug-only fallback for Foundry output inspection:
 FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
 
-### 8) Open PR from recon branch to base branch
+### 7) Open PR from recon branch to base branch
 
 Create PR `dev-recon -> dev` (or configured branch names).
 
@@ -157,7 +147,7 @@ PR description must include:
 6. exact `/start` request JSON for `scfuzzbench`
 7. any target-specific overrides and why
 
-### 9) Final `/start` request JSON guidance
+### 8) Final `/start` request JSON guidance
 
 Typical fields:
 1. `target_repo_url`: destination repo URL
