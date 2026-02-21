@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import textwrap
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
@@ -291,6 +292,85 @@ def write_placeholder_plot(title: str, outpath: Path, message: str) -> None:
     plt.close()
 
 
+def combo_label(combo: Tuple[str, ...]) -> str:
+    return " + ".join(combo)
+
+
+def _wrapped_lines(text: str, *, width: int) -> List[str]:
+    wrapped = textwrap.wrap(
+        text,
+        width=width,
+        break_long_words=True,
+        break_on_hyphens=False,
+    )
+    return wrapped if wrapped else [text]
+
+
+def _detail_lines(
+    entries: List[Tuple[str, List[str]]],
+    *,
+    width: int,
+    max_invariants_per_entry: int,
+) -> List[str]:
+    lines: List[str] = []
+    for label, invariants in entries:
+        lines.extend(_wrapped_lines(label, width=width))
+        shown = invariants[:max_invariants_per_entry]
+        if not shown:
+            lines.append("  - (none)")
+        else:
+            for invariant in shown:
+                lines.extend(_wrapped_lines(f"  - {invariant}", width=width))
+        remaining = len(invariants) - len(shown)
+        if remaining > 0:
+            lines.append(f"  - ... (+{remaining} more)")
+        lines.append("")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def draw_detail_panel(
+    ax: plt.Axes,
+    *,
+    title: str,
+    entries: List[Tuple[str, List[str]]],
+    width: int = 44,
+    max_invariants_per_entry: int = 8,
+) -> int:
+    ax.axis("off")
+    if not entries:
+        ax.text(
+            0.0,
+            1.0,
+            f"{title}\n\nNo intersections available.",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8,
+            family="monospace",
+        )
+        return 3
+
+    body = _detail_lines(
+        entries,
+        width=width,
+        max_invariants_per_entry=max_invariants_per_entry,
+    )
+    text = "\n".join([title, "", *body])
+    ax.text(
+        0.0,
+        1.0,
+        text,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8,
+        family="monospace",
+    )
+    return 2 + len(body)
+
+
 def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
     if not result.invariants:
@@ -322,21 +402,37 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
     max_height = max(float(np.max(heights)), 1.0)
     top_pad = max(0.5, max_height * 0.08)
 
-    fig_width = max(10.0, 6.0 + len(intersections) * 0.6)
-    fig_height = max(6.0, 4.0 + len(fuzzers) * 0.5)
+    detail_entries = [
+        (f"[{idx}] {combo_label(combo)} ({len(invariants)})", invariants)
+        for idx, (combo, invariants) in enumerate(intersections, start=1)
+    ]
+    detail_line_count = 2 + len(
+        _detail_lines(detail_entries, width=44, max_invariants_per_entry=8)
+    )
+    fig_width = max(12.0, 8.0 + len(intersections) * 0.6)
+    fig_height = max(6.5, 4.0 + len(fuzzers) * 0.5 + detail_line_count * 0.05)
     fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = fig.add_gridspec(
         2,
-        2,
-        width_ratios=[1.3, 4.2],
+        3,
+        width_ratios=[2.8, 1.3, 4.2],
         height_ratios=[3.2, 2.0],
-        wspace=0.2,
+        wspace=0.25,
         hspace=0.05,
     )
 
-    ax_bars = fig.add_subplot(gs[0, 1])
-    ax_matrix = fig.add_subplot(gs[1, 1], sharex=ax_bars)
-    ax_sets = fig.add_subplot(gs[1, 0], sharey=ax_matrix)
+    ax_details = fig.add_subplot(gs[:, 0])
+    ax_bars = fig.add_subplot(gs[0, 2])
+    ax_matrix = fig.add_subplot(gs[1, 2], sharex=ax_bars)
+    ax_sets = fig.add_subplot(gs[1, 1], sharey=ax_matrix)
+    fig.add_subplot(gs[0, 1]).axis("off")
+    draw_detail_panel(
+        ax_details,
+        title="Displayed intersections and invariant strings",
+        entries=detail_entries,
+        width=44,
+        max_invariants_per_entry=8,
+    )
 
     ax_bars.bar(x, heights, color="#1f77b4")
     for idx, height in enumerate(heights):
@@ -375,7 +471,9 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
 
     ax_matrix.set_yticks(y_ticks)
     ax_matrix.set_yticklabels(fuzzers)
-    ax_matrix.set_xlabel("Exact intersection (dot matrix)")
+    ax_matrix.set_xticks(x)
+    ax_matrix.set_xticklabels([str(i) for i in range(1, len(intersections) + 1)], fontsize=8)
+    ax_matrix.set_xlabel("Intersection ID (dot matrix; see left panel)")
     ax_matrix.grid(axis="x", alpha=0.2)
     ax_matrix.set_xlim(-0.6, len(intersections) - 0.4)
     ax_matrix.invert_yaxis()
@@ -414,7 +512,10 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
 
     if n == 1:
         fuzzer = fuzzers[0]
-        fig, ax = plt.subplots(figsize=(7, 5))
+        fig = plt.figure(figsize=(11, 5), constrained_layout=True)
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.4, 1.2], wspace=0.15)
+        ax = fig.add_subplot(gs[0, 0])
+        ax_details = fig.add_subplot(gs[0, 1])
         ax.add_patch(Circle((0.5, 0.5), 0.3, alpha=0.25, color="#1f77b4", lw=2))
         ax.text(
             0.5,
@@ -436,7 +537,18 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.axis("off")
-        fig.tight_layout()
+        draw_detail_panel(
+            ax_details,
+            title="Region invariant strings",
+            entries=[
+                (
+                    f"[1] {fuzzer} only ({intersection_size(result, (fuzzer,))})",
+                    result.intersections.get((fuzzer,), []),
+                )
+            ],
+            width=42,
+            max_invariants_per_entry=12,
+        )
         fig.savefig(out_png, dpi=200)
         plt.close(fig)
         return
@@ -447,7 +559,10 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
         b_only = intersection_size(result, (b,))
         ab = intersection_size(result, (a, b))
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig = plt.figure(figsize=(12, 5), constrained_layout=True)
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.5, 1.1], wspace=0.15)
+        ax = fig.add_subplot(gs[0, 0])
+        ax_details = fig.add_subplot(gs[0, 1])
         ax.add_patch(Circle((0.42, 0.5), 0.28, alpha=0.28, color="#1f77b4", lw=2))
         ax.add_patch(Circle((0.58, 0.5), 0.28, alpha=0.28, color="#ff7f0e", lw=2))
         ax.text(0.33, 0.5, str(a_only), ha="center", va="center", fontsize=15)
@@ -459,7 +574,17 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.axis("off")
-        fig.tight_layout()
+        draw_detail_panel(
+            ax_details,
+            title="Region invariant strings",
+            entries=[
+                (f"[1] {a} only ({a_only})", result.intersections.get((a,), [])),
+                (f"[2] {a} + {b} ({ab})", result.intersections.get(tuple(sorted((a, b))), [])),
+                (f"[3] {b} only ({b_only})", result.intersections.get((b,), [])),
+            ],
+            width=42,
+            max_invariants_per_entry=12,
+        )
         fig.savefig(out_png, dpi=200)
         plt.close(fig)
         return
@@ -474,7 +599,10 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
         bc = intersection_size(result, (b, c))
         abc = intersection_size(result, (a, b, c))
 
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig = plt.figure(figsize=(13, 6), constrained_layout=True)
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.6, 1.1], wspace=0.15)
+        ax = fig.add_subplot(gs[0, 0])
+        ax_details = fig.add_subplot(gs[0, 1])
         ax.add_patch(Circle((0.43, 0.58), 0.24, alpha=0.28, color="#1f77b4", lw=2))
         ax.add_patch(Circle((0.57, 0.58), 0.24, alpha=0.28, color="#ff7f0e", lw=2))
         ax.add_patch(Circle((0.50, 0.42), 0.24, alpha=0.28, color="#2ca02c", lw=2))
@@ -492,7 +620,24 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.axis("off")
-        fig.tight_layout()
+        draw_detail_panel(
+            ax_details,
+            title="Region invariant strings",
+            entries=[
+                (f"[1] {a} only ({a_only})", result.intersections.get((a,), [])),
+                (f"[2] {b} only ({b_only})", result.intersections.get((b,), [])),
+                (f"[3] {c} only ({c_only})", result.intersections.get((c,), [])),
+                (f"[4] {a} + {b} ({ab})", result.intersections.get(tuple(sorted((a, b))), [])),
+                (f"[5] {a} + {c} ({ac})", result.intersections.get(tuple(sorted((a, c))), [])),
+                (f"[6] {b} + {c} ({bc})", result.intersections.get(tuple(sorted((b, c))), [])),
+                (
+                    f"[7] {a} + {b} + {c} ({abc})",
+                    result.intersections.get(tuple(sorted((a, b, c))), []),
+                ),
+            ],
+            width=42,
+            max_invariants_per_entry=12,
+        )
         fig.savefig(out_png, dpi=200)
         plt.close(fig)
         return
