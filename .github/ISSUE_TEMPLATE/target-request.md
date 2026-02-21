@@ -9,8 +9,7 @@ title: "target: <org>/<repo>@<ref> -> Recon-Fuzz/<repo>-scfuzzbench"
 Paste a target request JSON payload below.
 
 References:
-- https://scfuzzbench.com/targets
-- https://github.com/Recon-Fuzz/scfuzzbench/blob/main/docs/targets.md
+- https://github.com/Recon-Fuzz/scfuzzbench/blob/main/skills/target-onboarding/SKILL.md
 
 ```json
 {
@@ -24,4 +23,3 @@ References:
   "benchmark_type": "property"
 }
 ```
-
