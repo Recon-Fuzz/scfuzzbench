@@ -34,6 +34,13 @@ A fuzzer is currently considered in-scope when it is:
 - Echidna
 - Medusa
 
+## Benchmark Targets
+
+- [Aave v4](https://github.com/Recon-Fuzz/aave-v4-scfuzzbench)
+- [Superform v2-periphery](https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench)
+
+You can [request a target here](https://github.com/Recon-Fuzz/scfuzzbench/issues). An agent skill is provided for easier inclusion.
+
 ## Documentation
 
 For all technical/operational details, use the docs site pages:
