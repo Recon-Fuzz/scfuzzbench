@@ -1,6 +1,6 @@
 ---
 name: target-onboarding
-description: Create and execute onboarding for a new scfuzzbench benchmark target end-to-end, including target-request issue, target repo setup, validation, and PR with /start payload.
+description: Create and execute onboarding for a new scfuzzbench benchmark target end-to-end, including target repo setup, validation, and PR with /start payload.
 metadata:
   short-description: Onboard a benchmark target end-to-end
 ---
@@ -10,7 +10,6 @@ metadata:
 Use this skill when onboarding a new benchmark target for `Recon-Fuzz/scfuzzbench`.
 
 This skill covers:
-- creating the target request issue in `Recon-Fuzz/scfuzzbench`
 - creating/maintaining `dev` and `dev-recon` branches in the target repo
 - porting recon harness/config files
 - running local validation
@@ -30,6 +29,7 @@ Required:
 
 Optional:
 - requester notes and constraints
+- `create_tracking_issue`: default `false`; only create a `Recon-Fuzz/scfuzzbench` tracking issue when explicitly requested by the user
 
 ## Non-negotiable constraints
 
@@ -41,9 +41,9 @@ Optional:
 
 ## Workflow
 
-### 1) Create or update the target request issue
+### 1) Optional: create/update a target tracking issue
 
-Open a GitHub issue in `Recon-Fuzz/scfuzzbench` for target onboarding.
+Do this only if the user explicitly asks for it.
 
 The issue body must include:
 - JSON payload with all required inputs
@@ -129,7 +129,7 @@ Suggested 10-minute commands:
 
 ```bash
 # Echidna
-timeout 600 echidna-test test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
+timeout 600 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
 
 # Medusa
 SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 600
@@ -192,4 +192,4 @@ Done means all are true:
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
 4. exact `/start` JSON is provided
-5. target request issue and PR URLs are recorded in final report
+5. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
