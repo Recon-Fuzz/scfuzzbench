@@ -13,8 +13,6 @@ Benchmark suite for smart-contract fuzzers.
   </tr>
 </table>
 
-`scfuzzbench` provides an up-to-date, practical benchmark for smart-contract fuzzers focused on stateful invariant testing in realistic DeFi scenarios.
-
 ## Motivation
 
 - Maintain a current view of common fuzzers under a shared, realistic workload.
