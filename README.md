@@ -39,7 +39,10 @@ A fuzzer is currently considered in-scope when it is:
 - [Aave v4](https://github.com/Recon-Fuzz/aave-v4-scfuzzbench)
 - [Superform v2-periphery](https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench)
 
-You can [request a target here](https://github.com/Recon-Fuzz/scfuzzbench/issues). An agent skill is provided for easier inclusion.
+Use the target onboarding skill for new targets:
+
+- `skills/README.md`
+- `skills/target-onboarding/SKILL.md`
 
 ## Documentation
 
@@ -49,5 +52,6 @@ For all technical/operational details, use the docs site pages:
 - Start benchmark request: `docs/start.md`
 - Methodology: `docs/methodology.md`
 - Operations guide (Terraform, running, reruns, analysis, CI workflows): `docs/operations.md`
+- Target onboarding skill (machine-oriented): `skills/target-onboarding/SKILL.md`
 
 Rendered docs navigation and run/benchmark pages are available under `docs/`.
