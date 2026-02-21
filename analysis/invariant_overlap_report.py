@@ -443,6 +443,7 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
         entries=detail_entries,
         width=detail_width,
         max_invariants_per_entry=4,
+        font_size=12,
     )
 
     ax_bars.bar(x, heights, color="#1f77b4")
