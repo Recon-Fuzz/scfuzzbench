@@ -32,8 +32,9 @@ A fuzzer is considered in-scope when it is:
 
 These are notable tools, but currently excluded from this benchmark because they do not meet one or more criteria above:
 
-- Orca: not open source.
-- ItyFuzz: not straightforward for assertion-failure/property style runs in this workflow.
-- Deadaluzz: not open source.
+- [Orca](https://docs.veridise.com/orca/): not open source.
+- [ItyFuzz](https://docs.ityfuzz.rs/): not straightforward for assertion-failure/property style runs in this workflow.
+- [Wake](https://github.com/Ackee-Blockchain/wake): Python-based workflow that requires a custom harness.
+- [Harvey](https://dl.acm.org/doi/10.1145/3368089.3417064): closed source.
 
 As tools evolve, this list should be revisited.
