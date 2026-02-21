@@ -437,11 +437,6 @@ def main() -> int:
                 "",
                 f"Opening: [{to}]({to})",
                 "",
-                "If you are not redirected automatically:",
-                f"- Introduction: [{to}]({to})",
-                "- All runs: [/runs/](/runs/)",
-                "- Benchmarks: [/benchmarks/](/benchmarks/)",
-                "",
             ]
         )
     else:
@@ -469,11 +464,6 @@ def main() -> int:
                 "# Redirecting to latest run...",
                 "",
                 f"Opening: [{to}]({to})",
-                "",
-                "If you are not redirected automatically:",
-                f"- Latest run: [{to}]({to})",
-                "- All runs: [/runs/](/runs/)",
-                "- Benchmarks: [/benchmarks/](/benchmarks/)",
                 "",
             ]
         )

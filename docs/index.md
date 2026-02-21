@@ -13,7 +13,3 @@ head:
 # Redirecting to introduction...
 
 Opening: [/introduction](/introduction)
-
-If you are not redirected automatically:
-- Introduction: [/introduction](/introduction)
-- Runs: [/runs/](/runs/)
