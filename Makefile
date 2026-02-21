@@ -34,7 +34,6 @@ REPORT_ANONYMIZE ?=
 BROKEN_INVARIANTS_CSV ?= $(ANALYSIS_OUT_DIR)/broken_invariants.csv
 BROKEN_INVARIANTS_MD ?= $(ANALYSIS_OUT_DIR)/broken_invariants.md
 INVARIANT_OVERLAP_PNG ?= $(IMAGES_OUT_DIR)/invariant_overlap_upset.png
-INVARIANT_VENN_PNG ?= $(IMAGES_OUT_DIR)/invariant_overlap_venn.png
 INVARIANT_TOP_K ?= 20
 WIDE_CSV ?=
 LONG_CSV ?= results_long.csv
@@ -138,4 +137,4 @@ report-events-to-cumulative: analysis-venv
 	$(ANALYSIS_PY) analysis/events_to_cumulative.py --events-csv $(EVENTS_CSV) --out-csv $(CUMULATIVE_CSV) --logs-dir $(ANALYSIS_LOGS_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG)
 
 report-invariant-overlap: analysis-venv
-	$(ANALYSIS_PY) analysis/invariant_overlap_report.py --events-csv $(EVENTS_CSV) --out-md $(BROKEN_INVARIANTS_MD) --out-csv $(BROKEN_INVARIANTS_CSV) --out-png $(INVARIANT_OVERLAP_PNG) --out-venn-png $(INVARIANT_VENN_PNG) $(INVARIANT_BUDGET_ARG) --top-k $(INVARIANT_TOP_K)
+	$(ANALYSIS_PY) analysis/invariant_overlap_report.py --events-csv $(EVENTS_CSV) --out-md $(BROKEN_INVARIANTS_MD) --out-csv $(BROKEN_INVARIANTS_CSV) --out-png $(INVARIANT_OVERLAP_PNG) $(INVARIANT_BUDGET_ARG) --top-k $(INVARIANT_TOP_K)

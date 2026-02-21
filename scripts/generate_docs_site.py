@@ -684,14 +684,10 @@ def main() -> int:
         logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
         corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
         invariant_chart_key = f"{r.analysis_prefix}/invariant_overlap_upset.png"
-        invariant_venn_key = f"{r.analysis_prefix}/invariant_overlap_venn.png"
         broken_md_key = f"{r.analysis_prefix}/broken_invariants.md"
         broken_csv_key = f"{r.analysis_prefix}/broken_invariants.csv"
         has_invariant_chart = (
             r.analysis_kind == "analysis" and head_exists(bucket, invariant_chart_key, profile=profile)
-        )
-        has_invariant_venn = (
-            r.analysis_kind == "analysis" and head_exists(bucket, invariant_venn_key, profile=profile)
         )
         has_broken_md = (
             r.analysis_kind == "analysis" and head_exists(bucket, broken_md_key, profile=profile)
@@ -711,8 +707,6 @@ def main() -> int:
                 lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
                 if has_invariant_chart:
                     lines.append(f"![Invariant Overlap (UpSet)]({analysis_base}/invariant_overlap_upset.png)")
-                if has_invariant_venn:
-                    lines.append(f"![Invariant Overlap (Venn-style)]({analysis_base}/invariant_overlap_venn.png)")
             else:
                 # Legacy reports prefix may not contain all charts/bundles.
                 lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
@@ -789,8 +783,6 @@ def main() -> int:
         lines.append("")
         if r.analyzed:
             lines.append("- Report prefix: " + f"{analysis_base}/")
-            if has_invariant_venn:
-                lines.append("- Invariant overlap (Venn-style): " + f"{analysis_base}/invariant_overlap_venn.png")
             if has_broken_md:
                 lines.append("- Broken invariants (Markdown): " + f"{analysis_base}/broken_invariants.md")
             if has_broken_csv:

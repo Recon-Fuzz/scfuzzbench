@@ -406,16 +406,17 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
         (f"[{idx}] {combo_label(combo)} ({len(invariants)})", invariants)
         for idx, (combo, invariants) in enumerate(intersections, start=1)
     ]
+    detail_width = 64
     detail_line_count = 2 + len(
-        _detail_lines(detail_entries, width=44, max_invariants_per_entry=8)
+        _detail_lines(detail_entries, width=detail_width, max_invariants_per_entry=8)
     )
-    fig_width = max(12.0, 8.0 + len(intersections) * 0.6)
+    fig_width = max(14.0, 10.0 + len(intersections) * 0.6)
     fig_height = max(6.5, 4.0 + len(fuzzers) * 0.5 + detail_line_count * 0.05)
     fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = fig.add_gridspec(
         2,
         3,
-        width_ratios=[2.8, 1.3, 4.2],
+        width_ratios=[4.2, 1.2, 4.0],
         height_ratios=[3.2, 2.0],
         wspace=0.25,
         hspace=0.05,
@@ -428,9 +429,9 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
     fig.add_subplot(gs[0, 1]).axis("off")
     draw_detail_panel(
         ax_details,
-        title="Displayed intersections and invariant strings",
+        title="Invariants",
         entries=detail_entries,
-        width=44,
+        width=detail_width,
         max_invariants_per_entry=8,
     )
 
@@ -651,13 +652,12 @@ def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build broken-invariant overlap artifacts (CSV + Markdown + UpSet and Venn-style charts)."
+        description="Build broken-invariant overlap artifacts (CSV + Markdown + UpSet chart)."
     )
     parser.add_argument("--events-csv", type=Path, required=True)
     parser.add_argument("--out-md", type=Path, required=True)
     parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--out-png", type=Path, required=True)
-    parser.add_argument("--out-venn-png", type=Path, default=None)
     parser.add_argument("--budget-hours", type=float, default=None)
     parser.add_argument("--top-k", type=int, default=20)
     return parser.parse_args()
@@ -681,14 +681,10 @@ def main() -> int:
         top_k=args.top_k,
     )
     plot_upset(result, args.out_png, top_k=args.top_k)
-    if args.out_venn_png is not None:
-        plot_venn_like(result, args.out_venn_png)
 
     print(f"wrote: {args.out_csv}")
     print(f"wrote: {args.out_md}")
     print(f"wrote: {args.out_png}")
-    if args.out_venn_png is not None:
-        print(f"wrote: {args.out_venn_png}")
     return 0
 
 
