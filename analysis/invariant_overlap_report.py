@@ -416,17 +416,17 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
                 [],
             )
         )
-    detail_width = 52
+    detail_width = 62
     detail_line_count = 2 + len(
         _detail_lines(detail_entries, width=detail_width, max_invariants_per_entry=4)
     )
-    fig_width = max(12.5, 8.0 + len(intersections) * 0.5)
+    fig_width = max(13.5, 8.5 + len(intersections) * 0.5)
     fig_height = max(6.5, 4.0 + len(fuzzers) * 0.5 + detail_line_count * 0.05)
     fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = fig.add_gridspec(
         2,
         2,
-        width_ratios=[1.9, 5.2],
+        width_ratios=[2.35, 4.75],
         height_ratios=[3.2, 2.0],
         wspace=0.25,
         hspace=0.05,
