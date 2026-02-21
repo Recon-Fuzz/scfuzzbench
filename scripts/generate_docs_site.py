@@ -713,6 +713,18 @@ def main() -> int:
         analysis_base = f"{base_url}/{r.analysis_prefix}"
         logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"
         corpus_base = f"{base_url}/corpus/{r.run_id}/{r.benchmark_uuid}"
+        invariant_chart_key = f"{r.analysis_prefix}/invariant_overlap_upset.png"
+        broken_md_key = f"{r.analysis_prefix}/broken_invariants.md"
+        broken_csv_key = f"{r.analysis_prefix}/broken_invariants.csv"
+        has_invariant_chart = (
+            r.analysis_kind == "analysis" and head_exists(bucket, invariant_chart_key, profile=profile)
+        )
+        has_broken_md = (
+            r.analysis_kind == "analysis" and head_exists(bucket, broken_md_key, profile=profile)
+        )
+        has_broken_csv = (
+            r.analysis_kind == "analysis" and head_exists(bucket, broken_csv_key, profile=profile)
+        )
 
         if r.analyzed:
             lines.append("## Charts")
@@ -723,6 +735,8 @@ def main() -> int:
                 lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
                 lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
                 lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+                if has_invariant_chart:
+                    lines.append(f"![Invariant Overlap (UpSet)]({analysis_base}/invariant_overlap_upset.png)")
             else:
                 # Legacy reports prefix may not contain all charts/bundles.
                 lines.append(f"![Bugs Over Time]({analysis_base}/bugs_over_time.png)")
@@ -743,6 +757,20 @@ def main() -> int:
             except Exception:
                 lines.append("_Failed to fetch REPORT.md from S3._")
                 lines.append("")
+
+            if has_broken_md:
+                lines.append("## Broken invariants")
+                lines.append("")
+                try:
+                    broken_raw = aws_text(
+                        ["s3", "cp", f"s3://{bucket}/{broken_md_key}", "-"],
+                        profile=profile,
+                    )
+                    lines.append(rewrite_headings(broken_raw, add=2).rstrip())
+                    lines.append("")
+                except Exception:
+                    lines.append("_Failed to fetch broken_invariants.md from S3._")
+                    lines.append("")
 
         # Manifest summary.
         lines.append("## Manifest")
@@ -785,6 +813,10 @@ def main() -> int:
         lines.append("")
         if r.analyzed:
             lines.append("- Report prefix: " + f"{analysis_base}/")
+            if has_broken_md:
+                lines.append("- Broken invariants (Markdown): " + f"{analysis_base}/broken_invariants.md")
+            if has_broken_csv:
+                lines.append("- Broken invariants (CSV): " + f"{analysis_base}/broken_invariants.csv")
         if r.analysis_kind == "analysis":
             bundles_base = f"{analysis_base}/bundles"
             lines.append("- Analysis bundle: " + f"{bundles_base}/analysis.zip")

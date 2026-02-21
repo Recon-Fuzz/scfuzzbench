@@ -31,6 +31,10 @@ REPORT_GRID_STEP_MIN ?= 6
 REPORT_CHECKPOINTS ?= 1,4,8,24
 REPORT_KS ?= 1,3,5
 REPORT_ANONYMIZE ?=
+BROKEN_INVARIANTS_CSV ?= $(ANALYSIS_OUT_DIR)/broken_invariants.csv
+BROKEN_INVARIANTS_MD ?= $(ANALYSIS_OUT_DIR)/broken_invariants.md
+INVARIANT_OVERLAP_PNG ?= $(IMAGES_OUT_DIR)/invariant_overlap_upset.png
+INVARIANT_TOP_K ?= 20
 WIDE_CSV ?=
 LONG_CSV ?= results_long.csv
 RUN_ID_ARG :=
@@ -40,6 +44,10 @@ endif
 REPORT_BUDGET_ARG :=
 ifneq ($(strip $(REPORT_BUDGET)),)
 REPORT_BUDGET_ARG := --budget $(REPORT_BUDGET)
+endif
+INVARIANT_BUDGET_ARG :=
+ifneq ($(strip $(REPORT_BUDGET)),)
+INVARIANT_BUDGET_ARG := --budget-hours $(REPORT_BUDGET)
 endif
 BENCHMARK_UUID_ARG :=
 ifneq ($(strip $(BENCHMARK_UUID)),)
@@ -69,7 +77,7 @@ EXCLUDE_ARG := --exclude-fuzzers $(EXCLUDE_FUZZERS)
 endif
 DURATION_ARG :=
 
-.PHONY: terraform-init terraform-init-backend terraform-fmt terraform-validate terraform-plan terraform-deploy terraform-destroy terraform-destroy-infra analysis-venv results-analyze results-download results-prepare results-analyze-filtered results-analyze-all results-inspect s3-purge-versions report-benchmark report-wide-to-long report-events-to-cumulative
+.PHONY: terraform-init terraform-init-backend terraform-fmt terraform-validate terraform-plan terraform-deploy terraform-destroy terraform-destroy-infra analysis-venv results-analyze results-download results-prepare results-analyze-filtered results-analyze-all results-inspect s3-purge-versions report-benchmark report-wide-to-long report-events-to-cumulative report-invariant-overlap
 
 terraform-init:
 	terraform -chdir=$(TF_DIR) init
@@ -111,7 +119,7 @@ results-prepare:
 results-analyze-filtered: analysis-venv
 	$(ANALYSIS_PY) scripts/run_analysis_filtered.py --logs-dir $(ANALYSIS_LOGS_DIR) --out-dir $(ANALYSIS_OUT_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG)
 
-results-analyze-all: analysis-venv results-download results-prepare results-analyze-filtered report-events-to-cumulative report-benchmark
+results-analyze-all: analysis-venv results-download results-prepare results-analyze-filtered report-events-to-cumulative report-benchmark report-invariant-overlap
 
 results-inspect:
 	python3 scripts/inspect_logs.py --logs-dir $(ANALYSIS_LOGS_DIR)
@@ -127,3 +135,6 @@ report-wide-to-long: analysis-venv
 
 report-events-to-cumulative: analysis-venv
 	$(ANALYSIS_PY) analysis/events_to_cumulative.py --events-csv $(EVENTS_CSV) --out-csv $(CUMULATIVE_CSV) --logs-dir $(ANALYSIS_LOGS_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG)
+
+report-invariant-overlap: analysis-venv
+	$(ANALYSIS_PY) analysis/invariant_overlap_report.py --events-csv $(EVENTS_CSV) --out-md $(BROKEN_INVARIANTS_MD) --out-csv $(BROKEN_INVARIANTS_CSV) --out-png $(INVARIANT_OVERLAP_PNG) $(INVARIANT_BUDGET_ARG) --top-k $(INVARIANT_TOP_K)
