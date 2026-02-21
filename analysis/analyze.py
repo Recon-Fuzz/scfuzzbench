@@ -111,56 +111,77 @@ def parse_foundry_log(
     events: List[Event] = []
     seen = set()
     first_ts: Optional[float] = None
+    last_ts: Optional[float] = None
+    fail_re = re.compile(r"\[FAIL[^\]]*\]\s+([A-Za-z0-9_]+)\(")
     with path.open("r", errors="ignore") as handle:
         for line in handle:
-            if not FOUNDATION_JSON_RE.match(line):
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            invariant = payload.get("invariant")
-            if not invariant:
-                continue
-            ts = payload.get("timestamp")
-            if ts is None:
-                continue
-            try:
-                ts_value = float(ts)
-            except (TypeError, ValueError):
-                continue
-            if first_ts is None:
-                # Foundry emits epoch timestamps; use the first seen timestamp as the
-                # baseline so elapsed_seconds measures time since the run began,
-                # not time since the first failure.
-                first_ts = ts_value
-            failed = payload.get("failed")
-            if failed is None:
-                # Foundry metric updates include invariant names but are not failures.
-                # Only count events that explicitly report failed > 0.
-                continue
-            try:
-                failed_value = int(failed)
-            except (TypeError, ValueError):
-                failed_value = 0
-            if failed_value <= 0:
-                continue
-            elapsed = ts_value - first_ts
-            if invariant in seen:
-                continue
-            seen.add(invariant)
-            events.append(
-                Event(
-                    run_id=run_id,
-                    instance_id=instance_id,
-                    fuzzer=normalize_fuzzer(fuzzer_label),
-                    fuzzer_label=fuzzer_label,
-                    event=invariant,
-                    elapsed_seconds=elapsed,
-                    source="foundry-json",
-                    log_path=str(path),
+            clean_line = ANSI_ESCAPE_RE.sub("", line)
+            if FOUNDATION_JSON_RE.match(clean_line):
+                try:
+                    payload = json.loads(clean_line)
+                except json.JSONDecodeError:
+                    payload = None
+                if payload is not None:
+                    invariant = payload.get("invariant")
+                    ts = payload.get("timestamp")
+                    if invariant and ts is not None:
+                        try:
+                            ts_value = float(ts)
+                        except (TypeError, ValueError):
+                            ts_value = None
+                        if ts_value is not None:
+                            last_ts = ts_value
+                            if first_ts is None:
+                                # Foundry emits epoch timestamps; use the first seen
+                                # timestamp as the baseline so elapsed_seconds measures
+                                # time since the run began, not time since the first
+                                # failure.
+                                first_ts = ts_value
+
+                            failed = payload.get("failed")
+                            if failed is None:
+                                metrics = payload.get("metrics")
+                                if isinstance(metrics, dict):
+                                    failed = metrics.get("failed")
+                            try:
+                                failed_value = int(failed) if failed is not None else 0
+                            except (TypeError, ValueError):
+                                failed_value = 0
+
+                            if failed_value > 0 and invariant not in seen:
+                                seen.add(invariant)
+                                events.append(
+                                    Event(
+                                        run_id=run_id,
+                                        instance_id=instance_id,
+                                        fuzzer=normalize_fuzzer(fuzzer_label),
+                                        fuzzer_label=fuzzer_label,
+                                        event=invariant,
+                                        elapsed_seconds=ts_value - first_ts,
+                                        source="foundry-json",
+                                        log_path=str(path),
+                                    )
+                                )
+                    continue
+
+            fail_match = fail_re.search(clean_line)
+            if fail_match and first_ts is not None and last_ts is not None:
+                invariant = fail_match.group(1)
+                if invariant in seen:
+                    continue
+                seen.add(invariant)
+                events.append(
+                    Event(
+                        run_id=run_id,
+                        instance_id=instance_id,
+                        fuzzer=normalize_fuzzer(fuzzer_label),
+                        fuzzer_label=fuzzer_label,
+                        event=invariant,
+                        elapsed_seconds=last_ts - first_ts,
+                        source="foundry-fail-line",
+                        log_path=str(path),
+                    )
                 )
-            )
     return events
 
 
