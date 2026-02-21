@@ -414,59 +414,29 @@ def main() -> int:
         dir_name_re=re.compile(r"^[0-9a-f]{32}$"),
     )
 
-    # Landing page: auto-open the latest benchmark run page.
+    # Landing page: always open Introduction.
     index_lines: list[str] = []
-    if not complete_runs:
-        # No redirect target; render a minimal useful landing page.
-        index_lines.extend(
-            [
-                "---",
-                "aside: false",
-                "---",
-                "",
-                "# Runs",
-                "",
-                f"_Generated at: **{generated_at}** (UTC)_",
-                "",
-                "_No complete runs found in the S3 run index._",
-                "",
-                "Go to: [/runs/](/runs/)",
-                "",
-            ]
-        )
-    else:
-        latest_run_id = complete_runs[0].run_id
-        latest_runs = [r for r in complete_runs if r.run_id == latest_run_id]
-        latest_runs.sort(key=lambda r: r.benchmark_uuid)
-        target = next((r for r in latest_runs if r.analyzed), latest_runs[0])
-        to = f"/runs/{target.run_id}/{target.benchmark_uuid}/"
-
-        # Meta refresh handles initial page load; the script handles SPA navigation to "/".
-        index_lines.extend(
-            [
-                "---",
-                "aside: false",
-                "head:",
-                "  - - meta",
-                "    - http-equiv: refresh",
-                f"      content: \"0; url={to}\"",
-                "  - - script",
-                "    - {}",
-                "    - |",
-                f"      window.location.replace(\"{to}\");",
-                "---",
-                "",
-                "# Redirecting to latest run...",
-                "",
-                f"Opening: [{to}]({to})",
-                "",
-                "If you are not redirected automatically:",
-                f"- Latest run: [{to}]({to})",
-                "- All runs: [/runs/](/runs/)",
-                "- Benchmarks: [/benchmarks/](/benchmarks/)",
-                "",
-            ]
-        )
+    to = "/introduction"
+    index_lines.extend(
+        [
+            "---",
+            "aside: false",
+            "head:",
+            "  - - meta",
+            "    - http-equiv: refresh",
+            f"      content: \"0; url={to}\"",
+            "  - - script",
+            "    - {}",
+            "    - |",
+            f"      window.location.replace(\"{to}\");",
+            "---",
+            "",
+            "# Redirecting to introduction...",
+            "",
+            f"Opening: [{to}]({to})",
+            "",
+        ]
+    )
     write_text(docs_dir / "index.md", "\n".join(index_lines).rstrip() + "\n")
 
     # Runs index page.
