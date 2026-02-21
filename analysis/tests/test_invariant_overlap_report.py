@@ -70,6 +70,33 @@ class InvariantOverlapReportTests(unittest.TestCase):
             self.assertIn("No broken invariants", empty_md.read_text(encoding="utf-8"))
             self.assertTrue(empty_png.exists())
 
+    def test_normalizes_qualified_event_names_across_fuzzers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "events.csv"
+            csv_path.write_text(
+                "\n".join(
+                    [
+                        "run_id,instance_id,fuzzer,event,elapsed_seconds",
+                        "1,i-a,echidna,property_previewEquivalenceFromShares(uint256),10",
+                        "1,i-b,medusa,CryticTester.property_previewEquivalenceFromShares(uint256),12",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            events = overlap.load_events(csv_path)
+            result = overlap.build_overlap(events, total_events=len(events))
+
+            self.assertIn(
+                ("echidna", "medusa"),
+                result.intersections,
+            )
+            self.assertEqual(
+                result.intersections[("echidna", "medusa")],
+                ["property_previewEquivalenceFromShares(uint256)"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

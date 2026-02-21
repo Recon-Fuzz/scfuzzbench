@@ -6,6 +6,7 @@ import csv
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
@@ -17,10 +18,25 @@ import pandas as pd
 
 REQUIRED_COLS = {"fuzzer", "event", "elapsed_seconds"}
 OPTIONAL_ID_COLS = ("run_id", "instance_id")
+QUALIFIED_EVENT_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_$]*\.)+(?P<name>[A-Za-z_][A-Za-z0-9_]*\([^)]*\))$"
+)
 
 
 def die(message: str) -> None:
     raise SystemExit(f"error: {message}")
+
+
+def normalize_invariant_name(value: str) -> str:
+    name = str(value).strip()
+    if not name:
+        return ""
+    # Medusa commonly emits qualified names (e.g. "CryticTester.property_x(...)")
+    # while other fuzzers emit just "property_x(...)". Canonicalize to function id.
+    match = QUALIFIED_EVENT_RE.match(name)
+    if match:
+        return match.group("name")
+    return name
 
 
 @dataclass(frozen=True)
@@ -51,7 +67,7 @@ def load_events(path: Path) -> pd.DataFrame:
             df[col] = "unknown"
 
     df["fuzzer"] = df["fuzzer"].astype(str).str.strip()
-    df["event"] = df["event"].astype(str).str.strip()
+    df["event"] = df["event"].astype(str).map(normalize_invariant_name)
     df["run_id"] = df["run_id"].astype(str).str.strip()
     df["instance_id"] = df["instance_id"].astype(str).str.strip()
     df["elapsed_seconds"] = pd.to_numeric(df["elapsed_seconds"], errors="coerce")
