@@ -1,6 +1,6 @@
 ---
 name: target-onboarding
-description: Create and execute onboarding for a new scfuzzbench benchmark target end-to-end, including target-request issue, target repo setup, validation, and PR with /start payload.
+description: Create and execute onboarding for a new scfuzzbench benchmark target end-to-end, including target repo setup, validation, and PR with /start payload.
 metadata:
   short-description: Onboard a benchmark target end-to-end
 ---
@@ -10,7 +10,6 @@ metadata:
 Use this skill when onboarding a new benchmark target for `Recon-Fuzz/scfuzzbench`.
 
 This skill covers:
-- creating the target request issue in `Recon-Fuzz/scfuzzbench`
 - creating/maintaining `dev` and `dev-recon` branches in the target repo
 - porting recon harness/config files
 - running local validation
@@ -41,23 +40,14 @@ Optional:
 
 ## Workflow
 
-### 1) Create or update the target request issue
-
-Open a GitHub issue in `Recon-Fuzz/scfuzzbench` for target onboarding.
-
-The issue body must include:
-- JSON payload with all required inputs
-- clear handoff prompt referencing this skill file
-- requester notes
-
-### 2) Create target repo baseline branch
+### 1) Create target repo baseline branch
 
 In destination repo:
 1. Checkout vulnerable baseline commit.
 2. Create `base_branch_name` (default `dev`) at that commit.
 3. Push and set as baseline/default as needed.
 
-### 3) Create recon branch and port harness
+### 2) Create recon branch and port harness
 
 1. Create `recon_branch_name` from base branch (default `dev-recon` from `dev`).
 2. Port full recon setup from source ref.
@@ -69,7 +59,7 @@ Minimum files/directories to port:
 4. `medusa.json`
 5. Required helpers/remappings/scripts used by recon tests
 
-### 4) Ensure benchmark-compatible config
+### 3) Ensure benchmark-compatible config
 
 `foundry.toml` invariant section must include benchmark-compatible values:
 
@@ -85,7 +75,7 @@ continuous_run = true
 corpus_dir = "corpus/foundry"
 ```
 
-### 5) Foundry assertion visibility shim
+### 4) Foundry assertion visibility shim
 
 Because assertion failures can be hidden in invariant output, enforce:
 1. assertion reason strings prefixed with `!!!`
@@ -93,7 +83,7 @@ Because assertion failures can be hidden in invariant output, enforce:
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
 
-### 6) Fuzzer-specific path rules
+### 5) Fuzzer-specific path rules
 
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
@@ -115,7 +105,7 @@ Example:
 }
 ```
 
-### 7) Local validation before PR
+### 6) Local validation before PR
 
 Run all:
 1. `forge test --match-contract CryticToFoundry --list`
@@ -129,7 +119,7 @@ Suggested 10-minute commands:
 
 ```bash
 # Echidna
-timeout 600 echidna-test test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
+timeout 600 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
 
 # Medusa
 SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 600
@@ -144,7 +134,7 @@ Debug-only fallback for Foundry output inspection:
 FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
 
-### 8) Open PR from recon branch to base branch
+### 7) Open PR from recon branch to base branch
 
 Create PR `dev-recon -> dev` (or configured branch names).
 
@@ -157,7 +147,7 @@ PR description must include:
 6. exact `/start` request JSON for `scfuzzbench`
 7. any target-specific overrides and why
 
-### 9) Final `/start` request JSON guidance
+### 8) Final `/start` request JSON guidance
 
 Typical fields:
 1. `target_repo_url`: destination repo URL
@@ -192,4 +182,4 @@ Done means all are true:
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
 4. exact `/start` JSON is provided
-5. target request issue and PR URLs are recorded in final report
+5. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
