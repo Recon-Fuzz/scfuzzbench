@@ -337,6 +337,7 @@ def draw_detail_panel(
     entries: List[Tuple[str, List[str]]],
     width: int = 44,
     max_invariants_per_entry: int = 8,
+    font_size: int = 10,
 ) -> int:
     ax.axis("off")
     if not entries:
@@ -347,7 +348,7 @@ def draw_detail_panel(
             transform=ax.transAxes,
             ha="left",
             va="top",
-            fontsize=8,
+            fontsize=font_size,
             family="monospace",
         )
         return 3
@@ -365,7 +366,7 @@ def draw_detail_panel(
         transform=ax.transAxes,
         ha="left",
         va="top",
-        fontsize=8,
+        fontsize=font_size,
         family="monospace",
     )
     return 2 + len(body)
