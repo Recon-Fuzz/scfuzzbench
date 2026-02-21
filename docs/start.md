@@ -4,8 +4,7 @@ This page creates a **benchmark request** issue in GitHub.
 
 Need a new target first? Use the target onboarding skill at
 [`skills/target-onboarding/SKILL.md`](https://github.com/Recon-Fuzz/scfuzzbench/blob/main/skills/target-onboarding/SKILL.md)
-and open a request with the
-[`target-request` issue template](https://github.com/Recon-Fuzz/scfuzzbench/issues/new?template=target-request.md).
+and open a target request issue in GitHub.
 
 The request moves through GitHub labels:
 

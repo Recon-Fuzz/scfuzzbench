@@ -43,15 +43,12 @@ Optional:
 
 ### 1) Create or update the target request issue
 
-Open a GitHub issue in `Recon-Fuzz/scfuzzbench` using template `target-request.md`.
+Open a GitHub issue in `Recon-Fuzz/scfuzzbench` for target onboarding.
 
 The issue body must include:
 - JSON payload with all required inputs
 - clear handoff prompt referencing this skill file
 - requester notes
-
-Required marker:
-- `<!-- scfuzzbench-target-request:v1 -->`
 
 ### 2) Create target repo baseline branch
 

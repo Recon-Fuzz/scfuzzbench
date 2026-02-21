@@ -43,7 +43,6 @@ Use the target onboarding skill for new targets:
 
 - `skills/README.md`
 - `skills/target-onboarding/SKILL.md`
-- Direct issue template: `https://github.com/Recon-Fuzz/scfuzzbench/issues/new?template=target-request.md`
 
 ## Documentation
 
