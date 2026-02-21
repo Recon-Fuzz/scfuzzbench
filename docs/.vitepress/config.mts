@@ -30,11 +30,11 @@ export default defineConfig({
 
   themeConfig: {
     nav: [
+      { text: "Introduction", link: "/introduction" },
       { text: "Runs", link: "/runs/" },
       { text: "Benchmarks", link: "/benchmarks/" },
       { text: "Start benchmark", link: "/start" },
       { text: "Submit target request", link: "/submit-target" },
-      { text: "Motivation", link: "/motivation" },
       { text: "Targets", link: "/targets" },
       { text: "Methodology", link: "/methodology" },
       { text: "GitHub", link: "https://github.com/Recon-Fuzz/scfuzzbench" },
@@ -44,11 +44,11 @@ export default defineConfig({
       {
         text: "Explore",
         items: [
+          { text: "Introduction", link: "/introduction" },
           { text: "Runs", link: "/runs/" },
           { text: "Benchmarks", link: "/benchmarks/" },
           { text: "Start Benchmark", link: "/start" },
           { text: "Submit Target Request", link: "/submit-target" },
-          { text: "Motivation", link: "/motivation" },
           { text: "Targets", link: "/targets" },
           { text: "Methodology", link: "/methodology" },
         ],

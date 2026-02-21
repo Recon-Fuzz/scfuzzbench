@@ -6,6 +6,9 @@ hero:
   tagline: Fully static, generated in CI from S3 run artifacts.
   actions:
     - theme: brand
+      text: Introduction
+      link: /introduction
+    - theme: alt
       text: Browse runs
       link: /runs/
     - theme: alt

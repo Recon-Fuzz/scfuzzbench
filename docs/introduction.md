@@ -1,8 +1,8 @@
-# Motivation
+# Introduction
 
 `scfuzzbench` exists to provide an up-to-date, practical benchmark for smart-contract fuzzers in one of the hardest DeFi scenarios: stateful invariant testing.
 
-## Why this benchmark exists
+## Motivation
 
 - Maintain a current view of common fuzzers under a shared, realistic workload.
 - Focus on benchmark quality:
