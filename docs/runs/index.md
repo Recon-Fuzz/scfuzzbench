@@ -1,11 +1,13 @@
----
-aside: false
----
-
 # Runs
 
-Branch preview list for updated overlap-report rendering.
+This page is generated in CI from the S3 run index (`runs/<run_id>/<benchmark_uuid>/manifest.json`).
 
-| Run ID | Date (UTC) | Benchmark | Target | Commit | Timeout |
-|---|---|---|---|---|---:|
-| [`1771615839`](./1771615839/027e45da412aec12841579d664c97ff8/) | `2026-02-20 19:30:39Z` | [`027e45da412aec12841579d664c97ff8`](../benchmarks/027e45da412aec12841579d664c97ff8/) | [`https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench`](https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench) | `dev-recon` | 12h |
+::: tip
+Only **complete** runs are shown (timeout + 1h grace).
+
+If you are previewing locally, run the generator first:
+
+```bash
+python3 scripts/generate_docs_site.py --bucket "$SCFUZZBENCH_BUCKET" --region "$AWS_REGION"
+```
+:::
