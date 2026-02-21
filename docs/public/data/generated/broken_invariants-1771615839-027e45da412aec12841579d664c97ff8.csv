@@ -1,0 +1,11 @@
+invariant,fuzzers,fuzzers_count,echidna_first_seen_s,medusa_first_seen_s,echidna_runs_hit,medusa_runs_hit
+CryticTester.doomsday_depositWithdrawSymmetrical(uint256),medusa,1,,6074.000,,2
+CryticTester.doomsday_mintRedeemSymmetrical(uint256),medusa,1,,48.000,,4
+CryticTester.property_accumulatorSharesDecreaseOnFulfill_exact(),medusa,1,,7948.000,,2
+CryticTester.property_comparePreviewMintAndConvertToAssets(uint256),medusa,1,,1046.000,,4
+CryticTester.property_previewEquivalenceFromAssets(uint256),medusa,1,,1007.000,,4
+CryticTester.property_previewEquivalenceFromShares(uint256),medusa,1,,45.000,,4
+doomsday_depositWithdrawSymmetrical(uint256),echidna,1,3884.590,,4,
+doomsday_mintRedeemSymmetrical(uint256),echidna,1,67.410,,4,
+property_accumulatorSharesDecreaseOnFulfill_exact(),echidna,1,10009.780,,1,
+property_previewEquivalenceFromShares(uint256),echidna,1,42.510,,4,

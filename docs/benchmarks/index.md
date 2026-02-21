@@ -1,7 +1,11 @@
+---
+aside: false
+---
+
 # Benchmarks
 
-This page is generated in CI from the S3 run index (`runs/<run_id>/<benchmark_uuid>/manifest.json`).
+Branch preview list for updated overlap-report rendering.
 
-::: tip
-Benchmarks are grouped by `benchmark_uuid`, showing the latest complete run per benchmark.
-:::
+| Benchmark | Latest Run | Date (UTC) | Target | Commit | Type | Instance | Instances |
+|---|---|---|---|---|---|---|---:|
+| [`027e45da412aec12841579d664c97ff8`](./027e45da412aec12841579d664c97ff8/) | [`1771615839`](../runs/1771615839/027e45da412aec12841579d664c97ff8/) | `2026-02-20 19:30:39Z` | [`https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench`](https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench) | `dev-recon` | `property` | `c6a.4xlarge` | 4 |
