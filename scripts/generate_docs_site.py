@@ -414,23 +414,33 @@ def main() -> int:
         dir_name_re=re.compile(r"^[0-9a-f]{32}$"),
     )
 
-    # Landing page: auto-open the latest benchmark run page.
+    # Landing page: auto-open the latest benchmark run page, or fallback to
+    # Introduction when there are no complete runs yet.
     index_lines: list[str] = []
     if not complete_runs:
-        # No redirect target; render a minimal useful landing page.
+        to = "/introduction"
         index_lines.extend(
             [
                 "---",
                 "aside: false",
+                "head:",
+                "  - - meta",
+                "    - http-equiv: refresh",
+                f"      content: \"0; url={to}\"",
+                "  - - script",
+                "    - {}",
+                "    - |",
+                f"      window.location.replace(\"{to}\");",
                 "---",
                 "",
-                "# Runs",
+                "# Redirecting to introduction...",
                 "",
-                f"_Generated at: **{generated_at}** (UTC)_",
+                f"Opening: [{to}]({to})",
                 "",
-                "_No complete runs found in the S3 run index._",
-                "",
-                "Go to: [/runs/](/runs/)",
+                "If you are not redirected automatically:",
+                f"- Introduction: [{to}]({to})",
+                "- All runs: [/runs/](/runs/)",
+                "- Benchmarks: [/benchmarks/](/benchmarks/)",
                 "",
             ]
         )
