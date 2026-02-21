@@ -292,7 +292,7 @@ def plot_time_to_k(
     fuzzers = [label_map.get(m.fuzzer, m.fuzzer) if label_map else m.fuzzer for m in metrics]
     x = np.arange(len(fuzzers))
     width = 0.8 / max(1, len(ks))
-    cmap = plt.get_cmap("Purples")
+    cmap = plt.get_cmap("Blues")
     sorted_ks = sorted(ks)
     k_rank = {k: idx for idx, k in enumerate(sorted_ks)}
     min_shade = 0.45
