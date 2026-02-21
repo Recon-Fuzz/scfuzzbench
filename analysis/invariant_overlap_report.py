@@ -13,6 +13,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 import numpy as np
 import pandas as pd
 
@@ -394,14 +395,124 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
     plt.close(fig)
 
 
+def intersection_size(result: OverlapResult, combo: Tuple[str, ...]) -> int:
+    return len(result.intersections.get(tuple(sorted(combo)), []))
+
+
+def plot_venn_like(result: OverlapResult, out_png: Path) -> None:
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    if not result.invariants:
+        write_placeholder_plot(
+            "Invariant overlap (Venn-style)",
+            out_png,
+            "No broken invariants found in the filtered event stream.",
+        )
+        return
+
+    fuzzers = sorted(result.fuzzers)
+    n = len(fuzzers)
+
+    if n == 1:
+        fuzzer = fuzzers[0]
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.add_patch(Circle((0.5, 0.5), 0.3, alpha=0.25, color="#1f77b4", lw=2))
+        ax.text(
+            0.5,
+            0.5,
+            str(intersection_size(result, (fuzzer,))),
+            ha="center",
+            va="center",
+            fontsize=18,
+        )
+        ax.text(
+            0.5,
+            0.15,
+            f"{fuzzer} (total={result.set_sizes[fuzzer]})",
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
+        ax.set_title("Invariant overlap (Venn-style)")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        return
+
+    if n == 2:
+        a, b = fuzzers
+        a_only = intersection_size(result, (a,))
+        b_only = intersection_size(result, (b,))
+        ab = intersection_size(result, (a, b))
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.add_patch(Circle((0.42, 0.5), 0.28, alpha=0.28, color="#1f77b4", lw=2))
+        ax.add_patch(Circle((0.58, 0.5), 0.28, alpha=0.28, color="#ff7f0e", lw=2))
+        ax.text(0.33, 0.5, str(a_only), ha="center", va="center", fontsize=15)
+        ax.text(0.67, 0.5, str(b_only), ha="center", va="center", fontsize=15)
+        ax.text(0.5, 0.5, str(ab), ha="center", va="center", fontsize=15, fontweight="bold")
+        ax.text(0.28, 0.17, f"{a} (total={result.set_sizes[a]})", ha="center", va="center", fontsize=10)
+        ax.text(0.72, 0.17, f"{b} (total={result.set_sizes[b]})", ha="center", va="center", fontsize=10)
+        ax.set_title("Invariant overlap (Venn-style)")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        return
+
+    if n == 3:
+        a, b, c = fuzzers
+        a_only = intersection_size(result, (a,))
+        b_only = intersection_size(result, (b,))
+        c_only = intersection_size(result, (c,))
+        ab = intersection_size(result, (a, b))
+        ac = intersection_size(result, (a, c))
+        bc = intersection_size(result, (b, c))
+        abc = intersection_size(result, (a, b, c))
+
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.add_patch(Circle((0.43, 0.58), 0.24, alpha=0.28, color="#1f77b4", lw=2))
+        ax.add_patch(Circle((0.57, 0.58), 0.24, alpha=0.28, color="#ff7f0e", lw=2))
+        ax.add_patch(Circle((0.50, 0.42), 0.24, alpha=0.28, color="#2ca02c", lw=2))
+        ax.text(0.34, 0.60, str(a_only), ha="center", va="center", fontsize=13)
+        ax.text(0.66, 0.60, str(b_only), ha="center", va="center", fontsize=13)
+        ax.text(0.50, 0.30, str(c_only), ha="center", va="center", fontsize=13)
+        ax.text(0.50, 0.63, str(ab), ha="center", va="center", fontsize=13)
+        ax.text(0.43, 0.47, str(ac), ha="center", va="center", fontsize=13)
+        ax.text(0.57, 0.47, str(bc), ha="center", va="center", fontsize=13)
+        ax.text(0.50, 0.52, str(abc), ha="center", va="center", fontsize=13, fontweight="bold")
+        ax.text(0.27, 0.80, f"{a} (total={result.set_sizes[a]})", fontsize=10)
+        ax.text(0.61, 0.80, f"{b} (total={result.set_sizes[b]})", fontsize=10)
+        ax.text(0.42, 0.12, f"{c} (total={result.set_sizes[c]})", fontsize=10)
+        ax.set_title("Invariant overlap (Venn-style)")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        return
+
+    write_placeholder_plot(
+        "Invariant overlap (Venn-style)",
+        out_png,
+        "Venn-style chart supports up to 3 fuzzers.\nUse UpSet chart for higher set counts.",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build broken-invariant overlap artifacts (CSV + Markdown + UpSet chart)."
+        description="Build broken-invariant overlap artifacts (CSV + Markdown + UpSet and Venn-style charts)."
     )
     parser.add_argument("--events-csv", type=Path, required=True)
     parser.add_argument("--out-md", type=Path, required=True)
     parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--out-png", type=Path, required=True)
+    parser.add_argument("--out-venn-png", type=Path, default=None)
     parser.add_argument("--budget-hours", type=float, default=None)
     parser.add_argument("--top-k", type=int, default=20)
     return parser.parse_args()
@@ -425,10 +536,14 @@ def main() -> int:
         top_k=args.top_k,
     )
     plot_upset(result, args.out_png, top_k=args.top_k)
+    if args.out_venn_png is not None:
+        plot_venn_like(result, args.out_venn_png)
 
     print(f"wrote: {args.out_csv}")
     print(f"wrote: {args.out_md}")
     print(f"wrote: {args.out_png}")
+    if args.out_venn_png is not None:
+        print(f"wrote: {args.out_venn_png}")
     return 0
 
 

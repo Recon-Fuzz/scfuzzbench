@@ -51,10 +51,13 @@ class InvariantOverlapReportTests(unittest.TestCase):
             overlap.write_csv_report(result, out_csv)
             overlap.write_md_report(result, out_md, budget_hours=0.03, top_k=20)
             overlap.plot_upset(result, out_png, top_k=20)
+            venn_png = tmp_dir / "invariant_overlap_venn.png"
+            overlap.plot_venn_like(result, venn_png)
 
             self.assertTrue(out_csv.exists())
             self.assertTrue(out_md.exists())
             self.assertTrue(out_png.exists())
+            self.assertTrue(venn_png.exists())
 
             with out_csv.open("r", newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
@@ -64,11 +67,14 @@ class InvariantOverlapReportTests(unittest.TestCase):
             empty_result = self.build_result(0.0)
             empty_md = tmp_dir / "empty_broken_invariants.md"
             empty_png = tmp_dir / "empty_invariant_overlap.png"
+            empty_venn_png = tmp_dir / "empty_invariant_overlap_venn.png"
             overlap.write_md_report(empty_result, empty_md, budget_hours=0.0, top_k=20)
             overlap.plot_upset(empty_result, empty_png, top_k=20)
+            overlap.plot_venn_like(empty_result, empty_venn_png)
 
             self.assertIn("No broken invariants", empty_md.read_text(encoding="utf-8"))
             self.assertTrue(empty_png.exists())
+            self.assertTrue(empty_venn_png.exists())
 
     def test_normalizes_qualified_event_names_across_fuzzers(self):
         with tempfile.TemporaryDirectory() as tmp:
