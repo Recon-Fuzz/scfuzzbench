@@ -1,6 +1,6 @@
 # Introduction
 
-`scfuzzbench` exists to provide an up-to-date, practical benchmark for smart-contract fuzzers in one of the hardest DeFi scenarios: stateful invariant testing.
+Welcome to `scfuzzbench`, an up-to-date, practical benchmark for smart-contract fuzzers focused in stateful invariant testing.
 
 ## Motivation
 
