@@ -447,9 +447,12 @@ def main() -> int:
 
     # /runs/latest should always resolve to the newest complete run.
     if complete_runs:
-        latest_run_id = complete_runs[0].run_id
-        latest_to = f"/runs/{latest_run_id}/"
-        latest_heading = f"Redirecting to latest run `{latest_run_id}`..."
+        latest_run = complete_runs[0]
+        latest_to = f"/runs/{latest_run.run_id}/{latest_run.benchmark_uuid}/"
+        latest_heading = (
+            f"Redirecting to latest run `{latest_run.run_id}` "
+            f"(`{latest_run.benchmark_uuid}`)..."
+        )
     else:
         latest_to = "/runs/"
         latest_heading = "Redirecting to runs index..."
