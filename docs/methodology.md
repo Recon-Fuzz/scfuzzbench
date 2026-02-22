@@ -138,11 +138,6 @@ Optional controls include `EXCLUDE_FUZZERS`, `REPORT_BUDGET`, `REPORT_GRID_STEP_
   - `overlap.csv` (cross-fuzzer Jaccard overlap)
   - `exclusive.csv` (events found by exactly one fuzzer)
 
-Foundry compatibility note:
-
-- Analysis now assumes Foundry emits explicit failure events (`{"type":"invariant_failure", ...}`).
-- Legacy Foundry logs that only expose periodic `failed` counters or `[FAIL ...]` text lines are not interpreted as invariant events.
-
 ### Cumulative conversion (`analysis/events_to_cumulative.py`)
 
 - Produces long-form CSV: `fuzzer, run_id, time_hours, bugs_found`.
