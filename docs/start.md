@@ -14,6 +14,12 @@ The request moves through GitHub labels:
 
 Use the preconfigured target selector to auto-fill target repo/commit for the current benchmark targets listed in `README.md`.
 
+Current preconfigured targets:
+
+- Aave v4 (`v0.5.6-recon`)
+- Superform v2-periphery (`dev-recon`)
+- Liquity Governance (V2) (`recon`)
+
 <StartBenchmark />
 
 ::: warning

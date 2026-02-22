@@ -31,6 +31,12 @@ const PRECONFIGURED_TARGETS: PreconfiguredTarget[] = [
     repoUrl: "https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench",
     commit: "dev-recon",
   },
+  {
+    id: "liquity-governance-v2",
+    label: "Liquity Governance (V2)",
+    repoUrl: "https://github.com/Recon-Fuzz/liquity-V2-gov-scfuzzbench",
+    commit: "recon",
+  },
 ];
 const CUSTOM_TARGET_ID = "custom";
 

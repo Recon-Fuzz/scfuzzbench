@@ -28,6 +28,12 @@ A fuzzer is considered in-scope when it is:
 - Echidna
 - Medusa
 
+## Benchmark targets
+
+- [Aave v4](https://github.com/Recon-Fuzz/aave-v4-scfuzzbench)
+- [Superform v2-periphery](https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench)
+- [Liquity Governance (V2)](https://github.com/Recon-Fuzz/liquity-V2-gov-scfuzzbench)
+
 ## Notable fuzzers currently excluded
 
 These are notable tools, but currently excluded from this benchmark because they do not meet one or more criteria above:
