@@ -91,7 +91,7 @@ Echidna:
 3. use assertion-mode config that matches recon harness invariants:
    - `testMode: "assertion"`
    - `prefix: "invariant_"`
-   - do not use `prefix: "property_"` for this setup
+   - make sure Echidna and Medusa global invariants are prefixed with `invariant_` instead of `property_` or `echidna_`
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
