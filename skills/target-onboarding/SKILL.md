@@ -37,6 +37,9 @@ Optional:
 3. Validate locally before opening PR.
 4. Keep global defaults in `scfuzzbench` generic; use per-target overrides only when needed.
 5. Do not leak secrets in issues/PRs.
+6. Every benchmark target must include canary checks:
+   - one canary assertion failure
+   - one canary global invariant failure prefixed with `invariant_`
 
 ## Workflow
 
@@ -82,8 +85,23 @@ Because assertion failures can be hidden in invariant output, enforce:
 2. per-assertion `invariant_assertion_failure_*` checks
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
+5. include `invariant_assertion_failure_CANARY_ASSERTION_FAILURE` that fails immediately in canary runs
 
-### 5) Fuzzer-specific path rules
+### 5) Canary requirement for every target
+
+Add these canaries to each target harness:
+1. Assertion canary:
+   - assertion reason string: `!!! CANARY_ASSERTION_FAILURE`
+   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY_ASSERTION_FAILURE`
+2. Global invariant canary:
+   - invariant function name must start with `invariant_`
+   - use `invariant_canary_global_invariant_failure` and make it fail immediately
+
+Both canaries are intentional failures used to verify:
+1. all fuzzers emit failures on the target
+2. the analysis/parser pipeline is capturing failures correctly
+
+### 6) Fuzzer-specific path rules
 
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
@@ -109,7 +127,7 @@ Example:
 }
 ```
 
-### 6) Local validation before PR
+### 7) Local validation before PR
 
 Run all:
 1. `forge test --match-contract CryticToFoundry --list`
@@ -118,6 +136,9 @@ Run all:
 4. Foundry invariant smoke run
 5. 10-minute trial for each fuzzer
 6. Ensure `CryticToFoundry.sol` has no `test_*` repro/unit tests
+7. Canary smoke checks must fail immediately:
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary_global_invariant_failure -vv`
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_assertion_failure_CANARY_ASSERTION_FAILURE -vv`
 
 Suggested 10-minute commands:
 
@@ -138,7 +159,7 @@ Debug-only fallback for Foundry output inspection:
 FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
 
-### 7) Open PR from recon branch to base branch
+### 8) Open PR from recon branch to base branch
 
 Create PR `dev-recon -> dev` (or configured branch names).
 
@@ -148,10 +169,11 @@ PR description must include:
 3. files copied/changed
 4. local smoke test summary
 5. 10-minute trial summary per fuzzer
-6. exact `/start` request JSON for `scfuzzbench`
-7. any target-specific overrides and why
+6. canary validation summary (assertion canary + global invariant canary)
+7. exact `/start` request JSON for `scfuzzbench`
+8. any target-specific overrides and why
 
-### 8) Final `/start` request JSON guidance
+### 9) Final `/start` request JSON guidance
 
 Typical fields:
 1. `target_repo_url`: destination repo URL
@@ -187,5 +209,6 @@ Done means all are true:
 1. destination repo is created/updated in `Recon-Fuzz`
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
-4. exact `/start` JSON is provided
-5. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
+4. canary assertion + canary `invariant_` global failure are present and intentionally failing
+5. exact `/start` JSON is provided
+6. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
