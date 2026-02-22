@@ -85,17 +85,18 @@ Because assertion failures can be hidden in invariant output, enforce:
 2. per-assertion `invariant_assertion_failure_*` checks
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
-5. include `invariant_assertion_failure_CANARY_ASSERTION_FAILURE` that fails immediately in canary runs
+5. include `invariant_assertion_failure_CANARY` for the assertion canary
+6. do not pre-seed assertion failures in `setUp()` (no hardcoded `_recordAssertion(false, ...)`)
 
 ### 5) Canary requirement for every target
 
 Add these canaries to each target harness:
 1. Assertion canary:
-   - assertion reason string: `!!! CANARY_ASSERTION_FAILURE`
-   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY_ASSERTION_FAILURE`
+   - assertion reason string: `!!! canary assertion`
+   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY`
 2. Global invariant canary:
    - invariant function name must start with `invariant_`
-   - use `invariant_canary_global_invariant_failure` and make it fail immediately
+   - use `invariant_canary` and make it fail immediately (`Canary invariant`)
 
 Both canaries are intentional failures used to verify:
 1. all fuzzers emit failures on the target
@@ -106,10 +107,10 @@ Both canaries are intentional failures used to verify:
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
 2. use `tests/...` only for target-specific exceptions
-3. use assertion-mode config that matches recon harness invariants:
-   - `testMode: "assertion"`
+3. use property-mode config for canary acceptance checks:
+   - `testMode: "property"`
    - `prefix: "invariant_"`
-   - make sure Echidna and Medusa global invariants are prefixed with `invariant_` instead of `property_` or `echidna_`
+   - make sure Echidna and Medusa global invariants use `invariant_` (not `property_` or `echidna_`)
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
@@ -137,17 +138,17 @@ Run all:
 5. 5-minute canary trial for each fuzzer
 6. Ensure `CryticToFoundry.sol` has no `test_*` repro/unit tests
 7. Canary smoke checks must fail immediately:
-   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary_global_invariant_failure -vv`
-   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_assertion_failure_CANARY_ASSERTION_FAILURE -vv`
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary -vv`
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_(canary_assertion_failure|assertion_failure_CANARY)' -vv`
 8. Acceptance gate: each fuzzer must report at least 2 bugs within 5 minutes:
-   - one bug containing `CANARY_GLOBAL_INVARIANT_FAILURE`
-   - one bug containing `CANARY_ASSERTION_FAILURE`
+   - one bug for `invariant_canary` (`Canary invariant`)
+   - one bug for the assertion canary (`!!! canary assertion` / `invariant_assertion_failure_CANARY`)
 
 Suggested 5-minute commands:
 
 ```bash
 # Echidna
-timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
+timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --test-mode property --format text --disable-slither
 
 # Medusa
 SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 300
@@ -206,7 +207,7 @@ Typical fields:
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
-   - enforce `testMode: "assertion"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
+   - enforce `testMode: "property"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
 
 ## Completion checklist
 
