@@ -14,6 +14,8 @@ export default defineConfig({
   head: [
     ["meta", { name: "viewport", content: "width=device-width, initial-scale=1" }],
     ["meta", { name: "theme-color", content: "#0b1220" }],
+    ["link", { rel: "icon", type: "image/png", href: "/favicon.png" }],
+    ["link", { rel: "apple-touch-icon", href: "/apple-touch-icon.png" }],
     [
       "script",
       {},
@@ -29,6 +31,8 @@ export default defineConfig({
   appearance: true,
 
   themeConfig: {
+    logo: "/images/scfuzzbench-logo.png",
+
     nav: [
       { text: "Introduction", link: "/introduction" },
       { text: "Runs", link: "/runs/" },
