@@ -262,6 +262,31 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def render_redirect_page(to: str, *, heading: str) -> str:
+    lines: list[str] = []
+    lines.extend(
+        [
+            "---",
+            "aside: false",
+            "head:",
+            "  - - meta",
+            "    - http-equiv: refresh",
+            f"      content: \"0; url={to}\"",
+            "  - - script",
+            "    - {}",
+            "    - |",
+            f"      window.location.replace(\"{to}\");",
+            "---",
+            "",
+            f"# {heading}",
+            "",
+            f"Opening: [{to}]({to})",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def rm_tree_children(dir_path: Path, *, keep_files: set[str], dir_name_re: re.Pattern[str] | None) -> None:
     if not dir_path.exists():
         return
@@ -406,7 +431,7 @@ def main() -> int:
     rm_tree_children(
         docs_dir / "runs",
         keep_files={"index.md"},
-        dir_name_re=re.compile(r"^[0-9]+$"),
+        dir_name_re=re.compile(r"^(?:[0-9]+|latest)$"),
     )
     rm_tree_children(
         docs_dir / "benchmarks",
@@ -415,29 +440,23 @@ def main() -> int:
     )
 
     # Landing page: always open Introduction.
-    index_lines: list[str] = []
-    to = "/introduction"
-    index_lines.extend(
-        [
-            "---",
-            "aside: false",
-            "head:",
-            "  - - meta",
-            "    - http-equiv: refresh",
-            f"      content: \"0; url={to}\"",
-            "  - - script",
-            "    - {}",
-            "    - |",
-            f"      window.location.replace(\"{to}\");",
-            "---",
-            "",
-            "# Redirecting to introduction...",
-            "",
-            f"Opening: [{to}]({to})",
-            "",
-        ]
+    write_text(
+        docs_dir / "index.md",
+        render_redirect_page("/introduction", heading="Redirecting to introduction..."),
     )
-    write_text(docs_dir / "index.md", "\n".join(index_lines).rstrip() + "\n")
+
+    # /runs/latest should always resolve to the newest complete run.
+    if complete_runs:
+        latest_run_id = complete_runs[0].run_id
+        latest_to = f"/runs/{latest_run_id}/"
+        latest_heading = f"Redirecting to latest run `{latest_run_id}`..."
+    else:
+        latest_to = "/runs/"
+        latest_heading = "Redirecting to runs index..."
+    write_text(
+        docs_dir / "runs" / "latest" / "index.md",
+        render_redirect_page(latest_to, heading=latest_heading),
+    )
 
     # Runs index page.
     runs_lines: list[str] = []
