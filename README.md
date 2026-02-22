@@ -2,10 +2,6 @@
 
 Benchmark suite for smart-contract fuzzers.
 
-<p align="center">
-  <img src="docs/public/images/scfuzzbench-logo.png" alt="scfuzzbench logo" width="160">
-</p>
-
 <table>
   <tr>
     <td><img src="docs/public/images/sample-run/bugs_over_time.png" alt="Bugs over time" width="420"></td>
