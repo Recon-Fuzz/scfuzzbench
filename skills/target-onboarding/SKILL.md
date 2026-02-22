@@ -174,6 +174,8 @@ Typical fields:
    - verify `!!!` prefix + per-assertion invariants + overridden assert helpers
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
+6. Echidna returns 0 issues unexpectedly
+   - when `testMode: "assertion"` is used, `prefix: "property_"` can produce suspiciously clean runs on some recon harnesses; try `prefix: "invariant_"` and rerun smoke + 10-minute trial
 
 ## Completion checklist
 
