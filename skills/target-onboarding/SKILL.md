@@ -104,11 +104,11 @@ Reference implementation:
 
 ```solidity
 // Properties.sol
-string constant ASSERTION_CANARY_ASSERTION_FAILURE = "!!! canary assertion";
+string constant ASSERTION_CANARY = "!!! canary assertion";
 string constant INVARIANT_CANARY_GLOBAL_INVARIANT_FAILURE = "Canary invariant";
 
 function assert_canary(uint256 entropy) public {
-    t(entropy > 0, ASSERTION_CANARY_ASSERTION_FAILURE);
+    t(entropy > 0, ASSERTION_CANARY);
 }
 
 function invariant_canary() public returns (bool) {
@@ -121,8 +121,8 @@ function invariant_canary() public returns (bool) {
 // CryticToFoundry.sol
 function invariant_assertion_failure_CANARY() public view {
     assertTrue(
-        !assertionFailures[ASSERTION_CANARY_ASSERTION_FAILURE],
-        ASSERTION_CANARY_ASSERTION_FAILURE
+        !assertionFailures[ASSERTION_CANARY],
+        ASSERTION_CANARY
     );
 }
 ```
