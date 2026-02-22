@@ -12,6 +12,14 @@ The request moves through GitHub labels:
 - `benchmark/02-validated`: added by the bot after JSON validation passes.
 - `benchmark/03-approved`: added manually by a maintainer.
 
+Use the preconfigured target selector to auto-fill target repo/commit for the current benchmark targets listed in `README.md`.
+
+Current preconfigured targets:
+
+- Aave v4 (`v0.5.6-recon`)
+- Superform v2-periphery (`dev-recon`)
+- Liquity v2 Governance (`recon`)
+
 <StartBenchmark />
 
 ::: warning

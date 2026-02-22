@@ -179,7 +179,7 @@ Typical fields:
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
-   - enforce `testMode: "assertion"` with `prefix: "invariant_"` and avoid `prefix: "property_"`
+   - enforce `testMode: "assertion"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
 
 ## Completion checklist
 
