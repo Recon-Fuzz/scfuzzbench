@@ -150,8 +150,8 @@ Suggested 5-minute commands:
 # Echidna
 timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --test-mode property --format text --disable-slither
 
-# Medusa
-SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 300
+# Medusa (Note: you may need to use SOLC_VERSION=0.8.30)
+timeout 300 medusa fuzz --config medusa.json --timeout 300
 
 # Foundry
 timeout 300 forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
