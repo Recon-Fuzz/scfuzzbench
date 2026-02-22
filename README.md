@@ -1,5 +1,9 @@
 # scfuzzbench
 
+<p align="center">
+  <img src="docs/public/images/scfuzzbench-logo.png" alt="scfuzzbench logo" width="220">
+</p>
+
 Benchmark suite for smart-contract fuzzers.
 
 <table>
