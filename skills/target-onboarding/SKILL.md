@@ -88,6 +88,10 @@ Because assertion failures can be hidden in invariant output, enforce:
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
 2. use `tests/...` only for target-specific exceptions
+3. use assertion-mode config that matches recon harness invariants:
+   - `testMode: "assertion"`
+   - `prefix: "invariant_"`
+   - make sure Echidna and Medusa global invariants are prefixed with `invariant_` instead of `property_` or `echidna_`
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
@@ -174,6 +178,8 @@ Typical fields:
    - verify `!!!` prefix + per-assertion invariants + overridden assert helpers
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
+6. Echidna returns 0 issues unexpectedly
+   - enforce `testMode: "assertion"` with `prefix: "invariant_"` and avoid `prefix: "property_"`
 
 ## Completion checklist
 
