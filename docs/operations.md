@@ -39,6 +39,9 @@ export TF_VAR_foundry_git_repo="https://github.com/aviggiano/foundry"
 export TF_VAR_foundry_git_ref="master"
 ```
 
+For Foundry runs, use [aviggiano/foundry](https://github.com/aviggiano/foundry) with JSON `invariant_failure` emission enabled.
+Current analysis intentionally relies on these explicit failure events.
+
 ## Re-run A Benchmark
 
 Runners are one-shot. To execute again with a fresh run prefix:
