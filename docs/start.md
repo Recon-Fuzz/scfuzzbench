@@ -12,6 +12,8 @@ The request moves through GitHub labels:
 - `benchmark/02-validated`: added by the bot after JSON validation passes.
 - `benchmark/03-approved`: added manually by a maintainer.
 
+Use the preconfigured target selector to auto-fill target repo/commit for the current benchmark targets listed in `README.md`.
+
 <StartBenchmark />
 
 ::: warning

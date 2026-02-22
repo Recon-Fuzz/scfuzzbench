@@ -4,6 +4,12 @@ import ec2Pricing from "../generated/ec2-pricing.json";
 
 type BenchmarkType = "property" | "optimization";
 type Ec2PricingTable = Record<string, number>;
+type PreconfiguredTarget = {
+  id: string;
+  label: string;
+  repoUrl: string;
+  commit: string;
+};
 
 const REPO_OWNER = "Recon-Fuzz";
 const REPO_NAME = "scfuzzbench";
@@ -12,11 +18,28 @@ const DEFAULT_FUZZER_ENV_OVERRIDE = JSON.stringify({
   ECHIDNA_TARGET: "tests/recon/CryticTester.sol",
 });
 const TARGET_REPO_OVERRIDE_KEY = "github.com/recon-fuzz/aave-v4-scfuzzbench";
+const PRECONFIGURED_TARGETS: PreconfiguredTarget[] = [
+  {
+    id: "aave-v4",
+    label: "Aave v4",
+    repoUrl: "https://github.com/Recon-Fuzz/aave-v4-scfuzzbench",
+    commit: "v0.5.6-recon",
+  },
+  {
+    id: "superform-v2-periphery",
+    label: "Superform v2-periphery",
+    repoUrl: "https://github.com/Recon-Fuzz/superform-v2-periphery-scfuzzbench",
+    commit: "dev-recon",
+  },
+];
+const CUSTOM_TARGET_ID = "custom";
 
 // Defaults are intentionally aligned with the repo's typical local `.env` values.
 // Avoid putting anything secret here: this is a fully static site.
-const targetRepoUrl = ref("https://github.com/Recon-Fuzz/aave-v4-scfuzzbench");
-const targetCommit = ref("v0.5.6-recon");
+const targetRepoUrl = ref(PRECONFIGURED_TARGETS[0].repoUrl);
+const targetCommit = ref(PRECONFIGURED_TARGETS[0].commit);
+const selectedPreconfiguredTargetId = ref(PRECONFIGURED_TARGETS[0].id);
+const isApplyingPreconfiguredTarget = ref(false);
 
 const benchmarkType = ref<BenchmarkType>("property");
 const instanceType = ref("c6a.4xlarge");
@@ -82,9 +105,47 @@ function normalizeRepoUrl(raw: string): string {
     .replace(/\/+$/, "");
 }
 
+function normalizeCommitRef(raw: string): string {
+  return raw.trim();
+}
+
 function isDefaultOverrideRepo(url: string): boolean {
   return normalizeRepoUrl(url) === TARGET_REPO_OVERRIDE_KEY;
 }
+
+function findPreconfiguredTarget(repoUrl: string, commit: string): PreconfiguredTarget | null {
+  const normalizedRepo = normalizeRepoUrl(repoUrl);
+  const normalizedCommit = normalizeCommitRef(commit);
+  return (
+    PRECONFIGURED_TARGETS.find(
+      (target) =>
+        normalizeRepoUrl(target.repoUrl) === normalizedRepo &&
+        normalizeCommitRef(target.commit) === normalizedCommit
+    ) ?? null
+  );
+}
+
+watch(selectedPreconfiguredTargetId, (selectedId) => {
+  if (selectedId === CUSTOM_TARGET_ID) {
+    return;
+  }
+  const selected = PRECONFIGURED_TARGETS.find((target) => target.id === selectedId);
+  if (!selected) {
+    return;
+  }
+  isApplyingPreconfiguredTarget.value = true;
+  targetRepoUrl.value = selected.repoUrl;
+  targetCommit.value = selected.commit;
+  isApplyingPreconfiguredTarget.value = false;
+});
+
+watch([targetRepoUrl, targetCommit], ([nextRepo, nextCommit]) => {
+  if (isApplyingPreconfiguredTarget.value) {
+    return;
+  }
+  const matched = findPreconfiguredTarget(nextRepo, nextCommit);
+  selectedPreconfiguredTargetId.value = matched ? matched.id : CUSTOM_TARGET_ID;
+});
 
 watch(targetRepoUrl, (next) => {
   if (!isDefaultOverrideRepo(next) && autoOverrideApplied.value) {
@@ -226,6 +287,20 @@ const showAdvanced = ref(false);
   <div class="sb-start">
     <div class="sb-start__panel">
       <div class="sb-start__grid">
+        <label class="sb-start__field">
+          <div class="sb-start__label">Preconfigured target</div>
+          <select v-model="selectedPreconfiguredTargetId" class="sb-start__input">
+            <option
+              v-for="target in PRECONFIGURED_TARGETS"
+              :key="target.id"
+              :value="target.id"
+            >
+              {{ target.label }} ({{ target.commit }})
+            </option>
+            <option :value="CUSTOM_TARGET_ID">Custom</option>
+          </select>
+        </label>
+
         <label class="sb-start__field">
           <div class="sb-start__label">Target repo URL</div>
           <input v-model="targetRepoUrl" class="sb-start__input" type="text" />
