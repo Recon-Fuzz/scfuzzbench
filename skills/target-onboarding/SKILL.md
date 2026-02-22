@@ -134,24 +134,29 @@ Run all:
 2. Echidna smoke run
 3. Medusa smoke run
 4. Foundry invariant smoke run
-5. 10-minute trial for each fuzzer
+5. 5-minute canary trial for each fuzzer
 6. Ensure `CryticToFoundry.sol` has no `test_*` repro/unit tests
 7. Canary smoke checks must fail immediately:
    - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary_global_invariant_failure -vv`
    - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_assertion_failure_CANARY_ASSERTION_FAILURE -vv`
+8. Acceptance gate: each fuzzer must report at least 2 bugs within 5 minutes:
+   - one bug containing `CANARY_GLOBAL_INVARIANT_FAILURE`
+   - one bug containing `CANARY_ASSERTION_FAILURE`
 
-Suggested 10-minute commands:
+Suggested 5-minute commands:
 
 ```bash
 # Echidna
-timeout 600 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
+timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
 
 # Medusa
-SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 600
+SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 300
 
 # Foundry
-timeout 600 forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
+timeout 300 forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
+
+Do not mark onboarding complete based only on a 10-minute run. Completion is tied to the 5-minute 2-canary acceptance gate above.
 
 Debug-only fallback for Foundry output inspection:
 
@@ -168,7 +173,7 @@ PR description must include:
 2. recon harness source ref
 3. files copied/changed
 4. local smoke test summary
-5. 10-minute trial summary per fuzzer
+5. 5-minute canary trial summary per fuzzer (must show both canaries found)
 6. canary validation summary (assertion canary + global invariant canary)
 7. exact `/start` request JSON for `scfuzzbench`
 8. any target-specific overrides and why
@@ -210,5 +215,6 @@ Done means all are true:
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
 4. canary assertion + canary `invariant_` global failure are present and intentionally failing
-5. exact `/start` JSON is provided
-6. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
+5. each fuzzer reports at least 2 canary bugs (assertion + global invariant) within 5 minutes
+6. exact `/start` JSON is provided
+7. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
