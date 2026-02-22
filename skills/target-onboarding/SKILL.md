@@ -136,15 +136,18 @@ Both canaries are intentional failures used to verify:
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
 2. use `tests/...` only for target-specific exceptions
-3. use property-mode config for canary acceptance checks:
-   - `testMode: "property"`
-   - `prefix: "invariant_"`
-   - make sure Echidna and Medusa global invariants use `invariant_` (not `property_` or `echidna_`)
+3. enforce naming + config split:
+   - global invariants in harness code must use `invariant_` (never `property_` or `crytic_`)
+   - `echidna.yaml` should use `testMode: "assertion"`
+   - `echidna.yaml` should use `prefix: "echidna_"`
+   - rationale: in assertion mode, Echidna should catch assertion failures plus global properties in one run, so cannot use prefix "invariant"
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
 2. usually `test/recon/CryticTester.sol`
-3. if gas-floor errors occur, raise gas limits
+3. `medusa.json` property prefix should stay `invariant_`
+4. rationale: Medusa can run property and assertion testing at the same time
+5. if gas-floor errors occur, raise gas limits
 
 Example:
 
@@ -177,7 +180,7 @@ Suggested 5-minute commands:
 
 ```bash
 # Echidna
-timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --test-mode property --format text --disable-slither
+timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text --disable-slither
 
 # Medusa (Note: you may need to use SOLC_VERSION=0.8.30)
 timeout 300 medusa fuzz --config medusa.json --timeout 300
@@ -236,7 +239,8 @@ Typical fields:
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
-   - enforce `testMode: "property"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
+   - enforce `testMode: "assertion"` with `prefix: "echidna_"` in `echidna.yaml`
+   - keep global invariant function names as `invariant_` (not `property_` or `crytic_`)
 
 ## Completion checklist
 
