@@ -85,18 +85,47 @@ Because assertion failures can be hidden in invariant output, enforce:
 2. per-assertion `invariant_assertion_failure_*` checks
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
-5. include `invariant_assertion_failure_CANARY` for the assertion canary
-6. do not pre-seed assertion failures in `setUp()` (no hardcoded `_recordAssertion(false, ...)`)
+5. include `assert_canary(uint256 entropy)` for the assertion canary trigger path
+6. include `invariant_assertion_failure_CANARY` as a wrapper that checks `assertionFailures` only
+7. do not pre-seed assertion failures in `setUp()` (no hardcoded `_recordAssertion(false, ...)`)
 
 ### 5) Canary requirement for every target
 
 Add these canaries to each target harness:
 1. Assertion canary:
+   - helper/action function: `assert_canary(uint256 entropy)`
    - assertion reason string: `!!! canary assertion`
-   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY`
+   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY` (do not call `assert_canary` from inside this wrapper)
 2. Global invariant canary:
    - invariant function name must start with `invariant_`
    - use `invariant_canary` and make it fail immediately (`Canary invariant`)
+
+Reference implementation:
+
+```solidity
+// Properties.sol
+string constant ASSERTION_CANARY_ASSERTION_FAILURE = "!!! canary assertion";
+string constant INVARIANT_CANARY_GLOBAL_INVARIANT_FAILURE = "Canary invariant";
+
+function assert_canary(uint256 entropy) public {
+    t(entropy > 0, ASSERTION_CANARY_ASSERTION_FAILURE);
+}
+
+function invariant_canary() public returns (bool) {
+    t(false, INVARIANT_CANARY_GLOBAL_INVARIANT_FAILURE);
+    return false;
+}
+```
+
+```solidity
+// CryticToFoundry.sol
+function invariant_assertion_failure_CANARY() public view {
+    assertTrue(
+        !assertionFailures[ASSERTION_CANARY_ASSERTION_FAILURE],
+        ASSERTION_CANARY_ASSERTION_FAILURE
+    );
+}
+```
 
 Both canaries are intentional failures used to verify:
 1. all fuzzers emit failures on the target
@@ -137,12 +166,12 @@ Run all:
 4. Foundry invariant smoke run
 5. 5-minute canary trial for each fuzzer
 6. Ensure `CryticToFoundry.sol` has no `test_*` repro/unit tests
-7. Canary smoke checks must fail immediately:
+7. Canary smoke checks must fail within the smoke trial window:
    - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary -vv`
-   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_(canary_assertion_failure|assertion_failure_CANARY)' -vv`
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_assertion_failure_CANARY' -vv`
 8. Acceptance gate: each fuzzer must report at least 2 bugs within 5 minutes:
    - one bug for `invariant_canary` (`Canary invariant`)
-   - one bug for the assertion canary (`!!! canary assertion` / `invariant_assertion_failure_CANARY`)
+   - one bug for the assertion canary (`!!! canary assertion` via `assert_canary` / `invariant_assertion_failure_CANARY`)
 
 Suggested 5-minute commands:
 
