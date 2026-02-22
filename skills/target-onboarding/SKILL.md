@@ -40,6 +40,9 @@ Optional:
 6. Every benchmark target must include canary checks:
    - one canary assertion failure
    - one canary global invariant failure prefixed with `invariant_`
+7. Naming rule:
+   - `invariant_*` functions must not have parameters
+   - if a global check has parameters, it must be prefixed `global_*`
 
 ## Workflow
 
@@ -98,6 +101,7 @@ Add these canaries to each target harness:
    - Foundry wrapper invariant: `invariant_assertion_failure_CANARY` (do not call `assert_canary` from inside this wrapper)
 2. Global invariant canary:
    - invariant function name must start with `invariant_`
+   - canary invariant must take no parameters
    - use `invariant_canary` and make it fail immediately (`Canary invariant`)
 
 Reference implementation:
@@ -137,7 +141,9 @@ Echidna:
 1. usually use `test/recon/CryticTester.sol`
 2. use `tests/...` only for target-specific exceptions
 3. enforce naming + config split:
-   - global invariants in harness code must use `invariant_` (never `property_` or `crytic_`)
+   - global checks in harness code must never use `property_` or `crytic_`
+   - use `invariant_` only for no-arg globals
+   - if a global check has parameters, prefix it `global_`
    - `echidna.yaml` should use `testMode: "assertion"`
    - `echidna.yaml` should use `prefix: "echidna_"`
    - rationale: in assertion mode, Echidna should catch assertion failures plus global properties in one run, so cannot use prefix "invariant"
@@ -240,7 +246,8 @@ Typical fields:
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
    - enforce `testMode: "assertion"` with `prefix: "echidna_"` in `echidna.yaml`
-   - keep global invariant function names as `invariant_` (not `property_` or `crytic_`)
+   - enforce naming rule: `invariant_*` must be no-arg, parameterized globals must be `global_*`
+   - keep global checks out of `property_` and `crytic_`
 
 ## Completion checklist
 
@@ -249,6 +256,7 @@ Done means all are true:
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
 4. canary assertion + canary `invariant_` global failure are present and intentionally failing
-5. each fuzzer reports at least 2 canary bugs (assertion + global invariant) within 5 minutes
-6. exact `/start` JSON is provided
-7. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
+5. no parameterized function is prefixed `invariant_` (use `global_*` for parameterized globals)
+6. each fuzzer reports at least 2 canary bugs (assertion + global invariant) within 5 minutes
+7. exact `/start` JSON is provided
+8. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
