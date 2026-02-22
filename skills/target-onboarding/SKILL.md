@@ -140,7 +140,7 @@ Echidna:
    - global invariants in harness code must use `invariant_` (never `property_` or `crytic_`)
    - `echidna.yaml` should use `testMode: "assertion"`
    - `echidna.yaml` should use `prefix: "echidna_"`
-   - rationale: in assertion mode, Echidna should catch assertion failures plus `echidna_` global properties in one run
+   - rationale: in assertion mode, Echidna should catch assertion failures plus global properties in one run, so cannot use prefix "invariant"
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
