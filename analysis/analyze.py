@@ -111,8 +111,6 @@ def parse_foundry_log(
     events: List[Event] = []
     seen = set()
     first_ts: Optional[float] = None
-    last_ts: Optional[float] = None
-    fail_re = re.compile(r"\[FAIL[^\]]*\]\s+([A-Za-z0-9_]+)\(")
     with path.open("r", errors="ignore") as handle:
         for line in handle:
             clean_line = ANSI_ESCAPE_RE.sub("", line)
@@ -130,7 +128,6 @@ def parse_foundry_log(
                         except (TypeError, ValueError):
                             ts_value = None
                         if ts_value is not None:
-                            last_ts = ts_value
                             if first_ts is None:
                                 # Foundry emits epoch timestamps; use the first seen
                                 # timestamp as the baseline so elapsed_seconds measures
@@ -138,13 +135,7 @@ def parse_foundry_log(
                                 # failure.
                                 first_ts = ts_value
 
-                            failed = payload.get("failed")
-                            try:
-                                failed_value = int(failed) if failed is not None else 0
-                            except (TypeError, ValueError):
-                                failed_value = 0
-
-                            if failed_value > 0 and invariant not in seen:
+                            if payload.get("type") == "invariant_failure" and invariant not in seen:
                                 seen.add(invariant)
                                 events.append(
                                     Event(
@@ -154,30 +145,11 @@ def parse_foundry_log(
                                         fuzzer_label=fuzzer_label,
                                         event=invariant,
                                         elapsed_seconds=ts_value - first_ts,
-                                        source="foundry-json",
+                                        source="foundry-invariant-failure",
                                         log_path=str(path),
                                     )
                                 )
                     continue
-
-            fail_match = fail_re.search(clean_line)
-            if fail_match and first_ts is not None and last_ts is not None:
-                invariant = fail_match.group(1)
-                if invariant in seen:
-                    continue
-                seen.add(invariant)
-                events.append(
-                    Event(
-                        run_id=run_id,
-                        instance_id=instance_id,
-                        fuzzer=normalize_fuzzer(fuzzer_label),
-                        fuzzer_label=fuzzer_label,
-                        event=invariant,
-                        elapsed_seconds=last_ts - first_ts,
-                        source="foundry-fail-line",
-                        log_path=str(path),
-                    )
-                )
     return events
 
 
