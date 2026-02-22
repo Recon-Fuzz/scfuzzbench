@@ -37,6 +37,9 @@ Optional:
 3. Validate locally before opening PR.
 4. Keep global defaults in `scfuzzbench` generic; use per-target overrides only when needed.
 5. Do not leak secrets in issues/PRs.
+6. Every benchmark target must include canary checks:
+   - one canary assertion failure
+   - one canary global invariant failure prefixed with `invariant_`
 
 ## Workflow
 
@@ -82,16 +85,32 @@ Because assertion failures can be hidden in invariant output, enforce:
 2. per-assertion `invariant_assertion_failure_*` checks
 3. overridden assert helpers (`gt/gte/lt/lte/eq/t`) that record assertion failures
 4. `setUp()` with handler routing (`targetContract`, multiple `targetSender` values)
+5. include `invariant_assertion_failure_CANARY` for the assertion canary
+6. do not pre-seed assertion failures in `setUp()` (no hardcoded `_recordAssertion(false, ...)`)
 
-### 5) Fuzzer-specific path rules
+### 5) Canary requirement for every target
+
+Add these canaries to each target harness:
+1. Assertion canary:
+   - assertion reason string: `!!! canary assertion`
+   - Foundry wrapper invariant: `invariant_assertion_failure_CANARY`
+2. Global invariant canary:
+   - invariant function name must start with `invariant_`
+   - use `invariant_canary` and make it fail immediately (`Canary invariant`)
+
+Both canaries are intentional failures used to verify:
+1. all fuzzers emit failures on the target
+2. the analysis/parser pipeline is capturing failures correctly
+
+### 6) Fuzzer-specific path rules
 
 Echidna:
 1. usually use `test/recon/CryticTester.sol`
 2. use `tests/...` only for target-specific exceptions
-3. use assertion-mode config that matches recon harness invariants:
-   - `testMode: "assertion"`
+3. use property-mode config for canary acceptance checks:
+   - `testMode: "property"`
    - `prefix: "invariant_"`
-   - make sure Echidna and Medusa global invariants are prefixed with `invariant_` instead of `property_` or `echidna_`
+   - make sure Echidna and Medusa global invariants use `invariant_` (not `property_` or `echidna_`)
 
 Medusa:
 1. use concrete compilation target file (not `"."`)
@@ -109,28 +128,36 @@ Example:
 }
 ```
 
-### 6) Local validation before PR
+### 7) Local validation before PR
 
 Run all:
 1. `forge test --match-contract CryticToFoundry --list`
 2. Echidna smoke run
 3. Medusa smoke run
 4. Foundry invariant smoke run
-5. 10-minute trial for each fuzzer
+5. 5-minute canary trial for each fuzzer
 6. Ensure `CryticToFoundry.sol` has no `test_*` repro/unit tests
+7. Canary smoke checks must fail immediately:
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test invariant_canary -vv`
+   - `FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_(canary_assertion_failure|assertion_failure_CANARY)' -vv`
+8. Acceptance gate: each fuzzer must report at least 2 bugs within 5 minutes:
+   - one bug for `invariant_canary` (`Canary invariant`)
+   - one bug for the assertion canary (`!!! canary assertion` / `invariant_assertion_failure_CANARY`)
 
-Suggested 10-minute commands:
+Suggested 5-minute commands:
 
 ```bash
 # Echidna
-timeout 600 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --format text
+timeout 300 echidna test/recon/CryticTester.sol --contract CryticTester --config echidna.yaml --test-mode property --format text --disable-slither
 
-# Medusa
-SOLC_VERSION=0.8.30 medusa fuzz --config medusa.json --timeout 600
+# Medusa (Note: you may need to use SOLC_VERSION=0.8.30)
+timeout 300 medusa fuzz --config medusa.json --timeout 300
 
 # Foundry
-timeout 600 forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
+timeout 300 forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
+
+Do not mark onboarding complete based only on a 10-minute run. Completion is tied to the 5-minute 2-canary acceptance gate above.
 
 Debug-only fallback for Foundry output inspection:
 
@@ -138,7 +165,7 @@ Debug-only fallback for Foundry output inspection:
 FOUNDRY_INVARIANT_CONTINUOUS_RUN=false forge test --match-contract CryticToFoundry --match-test 'invariant_' -vv
 ```
 
-### 7) Open PR from recon branch to base branch
+### 8) Open PR from recon branch to base branch
 
 Create PR `dev-recon -> dev` (or configured branch names).
 
@@ -147,11 +174,12 @@ PR description must include:
 2. recon harness source ref
 3. files copied/changed
 4. local smoke test summary
-5. 10-minute trial summary per fuzzer
-6. exact `/start` request JSON for `scfuzzbench`
-7. any target-specific overrides and why
+5. 5-minute canary trial summary per fuzzer (must show both canaries found)
+6. canary validation summary (assertion canary + global invariant canary)
+7. exact `/start` request JSON for `scfuzzbench`
+8. any target-specific overrides and why
 
-### 8) Final `/start` request JSON guidance
+### 9) Final `/start` request JSON guidance
 
 Typical fields:
 1. `target_repo_url`: destination repo URL
@@ -179,7 +207,7 @@ Typical fields:
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
-   - enforce `testMode: "assertion"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
+   - enforce `testMode: "property"` with `prefix: "invariant_"` and avoid `prefix: "property_"` or `prefix: "echidna_"`
 
 ## Completion checklist
 
@@ -187,5 +215,7 @@ Done means all are true:
 1. destination repo is created/updated in `Recon-Fuzz`
 2. base and recon branches are pushed
 3. recon PR is open with required validation details
-4. exact `/start` JSON is provided
-5. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
+4. canary assertion + canary `invariant_` global failure are present and intentionally failing
+5. each fuzzer reports at least 2 canary bugs (assertion + global invariant) within 5 minutes
+6. exact `/start` JSON is provided
+7. PR URL is recorded in final report; include tracking issue URL only if one was explicitly requested
