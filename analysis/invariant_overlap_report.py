@@ -21,8 +21,9 @@ import pandas as pd
 REQUIRED_COLS = {"fuzzer", "event", "elapsed_seconds"}
 OPTIONAL_ID_COLS = ("run_id", "instance_id")
 QUALIFIED_EVENT_RE = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_$]*\.)+(?P<name>[A-Za-z_][A-Za-z0-9_]*\([^)]*\))$"
+    r"^(?:[A-Za-z_][A-Za-z0-9_$]*\.)+(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)$"
 )
+TRAILING_PARAMS_RE = re.compile(r"\([^()]*\)$")
 
 
 def die(message: str) -> None:
@@ -34,11 +35,12 @@ def normalize_invariant_name(value: str) -> str:
     if not name:
         return ""
     # Medusa commonly emits qualified names (e.g. "CryticTester.property_x(...)")
-    # while other fuzzers emit just "property_x(...)". Canonicalize to function id.
+    # while other fuzzers emit just "property_x(...)". Canonicalize to function id
+    # and drop Solidity-style parameter signatures for grouping/readability.
     match = QUALIFIED_EVENT_RE.match(name)
     if match:
-        return match.group("name")
-    return name
+        name = match.group("name")
+    return TRAILING_PARAMS_RE.sub("", name)
 
 
 @dataclass(frozen=True)
@@ -310,19 +312,22 @@ def _detail_lines(
     entries: List[Tuple[str, List[str]]],
     *,
     width: int,
-    max_invariants_per_entry: int,
+    max_invariants_per_entry: Optional[int],
 ) -> List[str]:
     lines: List[str] = []
     for label, invariants in entries:
         lines.extend(_wrapped_lines(label, width=width))
-        shown = invariants[:max_invariants_per_entry]
+        if max_invariants_per_entry is None:
+            shown = invariants
+        else:
+            shown = invariants[:max_invariants_per_entry]
         if not shown:
             lines.append("  - (none)")
         else:
             for invariant in shown:
                 lines.extend(_wrapped_lines(f"  - {invariant}", width=width))
         remaining = len(invariants) - len(shown)
-        if remaining > 0:
+        if remaining > 0 and max_invariants_per_entry is not None:
             lines.append(f"  - ... (+{remaining} more)")
         lines.append("")
     if lines and lines[-1] == "":
@@ -336,7 +341,7 @@ def draw_detail_panel(
     title: str,
     entries: List[Tuple[str, List[str]]],
     width: int = 44,
-    max_invariants_per_entry: int = 8,
+    max_invariants_per_entry: Optional[int] = 8,
     font_size: int = 10,
 ) -> int:
     ax.axis("off")
@@ -409,27 +414,20 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
     ]
     # Keep details readable in the top-left panel above "Set size" without
     # squeezing the main charts on the right.
-    detail_entries = detail_entries_all[:10]
-    if len(detail_entries_all) > len(detail_entries):
-        detail_entries.append(
-            (
-                f"... (+{len(detail_entries_all) - len(detail_entries)} more intersections)",
-                [],
-            )
-        )
+    detail_entries = detail_entries_all
     detail_width = 62
     detail_line_count = 2 + len(
-        _detail_lines(detail_entries, width=detail_width, max_invariants_per_entry=4)
+        _detail_lines(detail_entries, width=detail_width, max_invariants_per_entry=None)
     )
     fig_width = max(13.5, 8.5 + len(intersections) * 0.5)
-    fig_height = max(6.5, 4.0 + len(fuzzers) * 0.5 + detail_line_count * 0.05)
+    fig_height = max(6.5, 4.0 + len(fuzzers) * 0.5 + detail_line_count * 0.08)
     fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = fig.add_gridspec(
         2,
         2,
-        width_ratios=[2.35, 4.75],
+        width_ratios=[2.6, 4.5],
         height_ratios=[3.2, 2.0],
-        wspace=0.25,
+        wspace=0.18,
         hspace=0.05,
     )
 
@@ -442,7 +440,7 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
         title="Invariants",
         entries=detail_entries,
         width=detail_width,
-        max_invariants_per_entry=4,
+        max_invariants_per_entry=None,
         font_size=12,
     )
 

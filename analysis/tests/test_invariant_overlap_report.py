@@ -100,8 +100,19 @@ class InvariantOverlapReportTests(unittest.TestCase):
             )
             self.assertEqual(
                 result.intersections[("echidna", "medusa")],
-                ["property_previewEquivalenceFromShares(uint256)"],
+                ["property_previewEquivalenceFromShares"],
             )
+
+    def test_detail_lines_without_limit_do_not_truncate(self):
+        lines = overlap._detail_lines(
+            entries=[("[1] foundry + medusa (2)", ["inv_a", "inv_b", "inv_c"])],
+            width=80,
+            max_invariants_per_entry=None,
+        )
+        self.assertIn("  - inv_a", lines)
+        self.assertIn("  - inv_b", lines)
+        self.assertIn("  - inv_c", lines)
+        self.assertFalse(any("... (+" in line for line in lines))
 
 
 if __name__ == "__main__":
