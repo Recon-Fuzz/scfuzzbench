@@ -32,8 +32,8 @@ const PRECONFIGURED_TARGETS: PreconfiguredTarget[] = [
     commit: "dev-recon",
   },
   {
-    id: "liquity-governance-v2",
-    label: "Liquity Governance (V2)",
+    id: "liquity-v2-governance",
+    label: "Liquity v2 Governance",
     repoUrl: "https://github.com/Recon-Fuzz/liquity-V2-gov-scfuzzbench",
     commit: "recon",
   },
