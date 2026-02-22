@@ -205,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="scfuzzbench-${{ matrix.benchmark_uuid }}-${{ matrix.run_id }}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "exists=true" >> "${GITHUB_OUTPUT}"
           else
             echo "exists=false" >> "${GITHUB_OUTPUT}"
@@ -407,4 +407,4 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.release_check.outputs.tag }}"
-          gh release create "${tag}" --title "${tag}" --notes-file "${{ steps.body.outputs.release_body }}"
+          gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --title "${tag}" --notes-file "${{ steps.body.outputs.release_body }}"
