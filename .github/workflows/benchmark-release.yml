@@ -237,8 +237,14 @@ jobs:
           dest_root="${GITHUB_WORKSPACE}/analysis-artifacts/${{ matrix.run_id }}"
           analysis_dir="${dest_root}/analysis"
           mkdir -p "${analysis_dir}"
-          manifest_key="logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}/manifest.json"
-          aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${manifest_key}" "${analysis_dir}/manifest.json"
+          logs_manifest_key="logs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}/manifest.json"
+          runs_manifest_key="runs/${{ matrix.run_id }}/${{ matrix.benchmark_uuid }}/manifest.json"
+          if aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${logs_manifest_key}" "${analysis_dir}/manifest.json"; then
+            echo "Fetched manifest from ${logs_manifest_key}"
+          else
+            aws s3 cp "s3://${SCFUZZBENCH_BUCKET}/${runs_manifest_key}" "${analysis_dir}/manifest.json"
+            echo "Fetched manifest from ${runs_manifest_key}"
+          fi
 
           timeout_hours="${{ matrix.timeout_hours }}"
           if [[ -z "${timeout_hours}" || "${timeout_hours}" == "null" ]]; then
