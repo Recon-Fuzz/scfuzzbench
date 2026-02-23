@@ -37,6 +37,12 @@ const PRECONFIGURED_TARGETS: PreconfiguredTarget[] = [
     repoUrl: "https://github.com/Recon-Fuzz/liquity-V2-gov-scfuzzbench",
     commit: "recon",
   },
+  {
+    id: "nerite",
+    label: "Nerite",
+    repoUrl: "https://github.com/Recon-Fuzz/nerite-scfuzzbench",
+    commit: "dev-recon",
+  },
 ];
 const CUSTOM_TARGET_ID = "custom";
 

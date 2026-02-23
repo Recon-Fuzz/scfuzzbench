@@ -19,6 +19,7 @@ Current preconfigured targets:
 - Aave v4 (`v0.5.6-recon`)
 - Superform v2-periphery (`dev-recon`)
 - Liquity v2 Governance (`recon`)
+- Nerite (`dev-recon`)
 
 <StartBenchmark />
 
