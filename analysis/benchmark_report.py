@@ -342,6 +342,7 @@ def plot_final_distribution(
         labels.append(label_map.get(str(fuzzer), str(fuzzer)) if label_map else str(fuzzer))
 
     plt.boxplot(data, labels=labels, showfliers=False)
+    plt.ylim(bottom=0)
     plt.ylabel("Bugs found at end of budget")
     plt.title("End-of-budget bug count distribution (per run)")
     plt.tight_layout()
