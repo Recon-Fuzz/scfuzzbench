@@ -19,6 +19,10 @@ on:
         description: "Comma-separated fuzzers to exclude (optional)."
         required: false
         default: ""
+      force_reanalyze:
+        description: "Re-run analysis and re-upload artifacts even if release tag exists."
+        required: false
+        default: "false"
   schedule:
     - cron: "0 * * * *"
 
@@ -214,17 +218,17 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Setup Python
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install analysis dependencies
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         run: make analysis-venv
 
       - name: Fetch manifest
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         id: manifest
         env:
           REPORT_BUDGET_HOURS: ${{ matrix.report_budget_hours }}
@@ -264,7 +268,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Run analysis
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         env:
           BUCKET: ${{ env.SCFUZZBENCH_BUCKET }}
           RUN_ID: ${{ matrix.run_id }}
@@ -279,7 +283,7 @@ jobs:
           make results-analyze-all
 
       - name: Collect analysis artifacts
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         run: |
           set -euo pipefail
           dest_root="${{ steps.manifest.outputs.dest_root }}"
@@ -306,7 +310,7 @@ jobs:
           cp "${dest_root}/data/"*.csv "${analysis_dir}/data/" || true
 
       - name: Build release bundles
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         id: bundles
         run: |
           set -euo pipefail
@@ -334,7 +338,7 @@ jobs:
           echo "release_dir=${release_dir}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload analysis artifacts to S3
-        if: ${{ steps.release_check.outputs.exists != 'true' }}
+        if: ${{ steps.release_check.outputs.exists != 'true' || inputs.force_reanalyze == 'true' }}
         run: |
           set -euo pipefail
           analysis_dir="${{ steps.manifest.outputs.analysis_dir }}"
