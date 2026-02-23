@@ -23,6 +23,7 @@ on:
     - cron: "0 * * * *"
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -408,3 +409,15 @@ jobs:
           set -euo pipefail
           tag="${{ steps.release_check.outputs.tag }}"
           gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --title "${tag}" --notes-file "${{ steps.body.outputs.release_body }}"
+
+  refresh_docs:
+    needs: [discover, release]
+    if: ${{ needs.discover.outputs.has_runs == 'true' && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger docs refresh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run "Docs Site" --repo "${GITHUB_REPOSITORY}" --ref main
