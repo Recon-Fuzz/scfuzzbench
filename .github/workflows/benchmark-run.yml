@@ -71,6 +71,11 @@ on:
         description: "JSON map of extra fuzzer env vars (optional)."
         required: false
         default: ""
+      dry_run:
+        description: "Validate inputs only; skip Terraform apply and infrastructure changes."
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       target_repo_url:
@@ -151,6 +156,11 @@ on:
         required: false
         type: string
         default: ""
+      dry_run:
+        description: "Validate inputs only; skip Terraform apply and infrastructure changes."
+        required: false
+        type: boolean
+        default: false
     secrets:
       AWS_ACCESS_KEY_ID:
         required: true
@@ -199,11 +209,13 @@ jobs:
           rm -rf "${topdir}" repo.tar.gz
 
       - name: Setup Terraform
+        if: ${{ !inputs.dry_run }}
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.7
 
       - name: Ensure AWS credentials are configured
+        if: ${{ !inputs.dry_run }}
         run: |
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
             echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets." >&2
@@ -219,6 +231,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials (keys)
+        if: ${{ !inputs.dry_run }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -226,6 +239,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Write backend config from secret
+        if: ${{ !inputs.dry_run }}
         env:
           TF_BACKEND_CONFIG: ${{ secrets.TF_BACKEND_CONFIG }}
         run: |
@@ -235,6 +249,7 @@ jobs:
           fi
 
       - name: Ensure backend config exists
+        if: ${{ !inputs.dry_run }}
         run: |
           if [ ! -f infrastructure/backend.hcl ]; then
             echo "Missing infrastructure/backend.hcl. Create it or set TF_BACKEND_CONFIG secret." >&2
@@ -242,6 +257,7 @@ jobs:
           fi
 
       - name: Terraform init (remote backend)
+        if: ${{ !inputs.dry_run }}
         run: make terraform-init-backend BACKEND_CONFIG=backend.hcl
 
       - name: Validate inputs
@@ -430,6 +446,7 @@ jobs:
 
       - name: Terraform apply
         id: apply
+        if: ${{ !inputs.dry_run }}
         env:
           TARGET_REPO_URL: ${{ inputs.target_repo_url }}
           TARGET_COMMIT: ${{ inputs.target_commit }}
@@ -513,6 +530,7 @@ jobs:
 
       - name: Collect Terraform outputs
         id: tf_outputs
+        if: ${{ !inputs.dry_run }}
         run: |
           terraform -chdir=infrastructure output -json > run_metadata.json
           run_id=$(jq -r '.run_id.value' run_metadata.json)
@@ -523,6 +541,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Upload run metadata
+        if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@v4
         with:
           name: run-metadata
@@ -530,9 +549,18 @@ jobs:
 
       - name: Summary
         run: |
-          {
-            echo "Benchmark run started."
-            echo ""
-            echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
-            echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
-          } >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            {
+              echo "Benchmark run dry-run validation passed."
+              echo ""
+              echo "- No Terraform apply was executed."
+              echo "- No infrastructure changes were made."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            {
+              echo "Benchmark run started."
+              echo ""
+              echo "- Run ID: ${{ steps.tf_outputs.outputs.run_id }}"
+              echo "- Benchmark UUID: ${{ steps.tf_outputs.outputs.benchmark_uuid }}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
