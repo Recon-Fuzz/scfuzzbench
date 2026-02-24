@@ -88,7 +88,7 @@ class BenchmarkReportTests(unittest.TestCase):
             self.assertIn("Throughput metrics", report)
             self.assertIn("| foundry | 1 | 1 | 12.00 [11.00,13.00] | 1 | 950.00 [900.00,1000.00] |", report)
 
-    def test_write_report_includes_additional_metrics_section(self):
+    def test_write_report_includes_progress_metrics_section(self):
         metrics = [
             benchmark_report.FuzzerMetrics(
                 fuzzer="foundry",
@@ -108,8 +108,8 @@ class BenchmarkReportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
-            additional_csv = tmp_dir / "additional_metrics_summary.csv"
-            additional_csv.write_text(
+            progress_csv = tmp_dir / "progress_metrics_summary.csv"
+            progress_csv.write_text(
                 "\n".join(
                     [
                         "fuzzer,runs,seqps_runs,coverage_runs,corpus_runs,favored_runs,failure_rate_runs,seqps_p50,seqps_p25,seqps_p75,coverage_p50,coverage_p25,coverage_p75,corpus_p50,corpus_p25,corpus_p75,favored_p50,favored_p25,favored_p75,failure_rate_p50,failure_rate_p25,failure_rate_p75",
@@ -119,7 +119,7 @@ class BenchmarkReportTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            additional = benchmark_report.load_additional_metrics_summary(additional_csv)
+            progress = benchmark_report.load_progress_metrics_summary(progress_csv)
 
             outpath = tmp_dir / "REPORT.md"
             benchmark_report.write_report(
@@ -128,11 +128,11 @@ class BenchmarkReportTests(unittest.TestCase):
                 checkpoints=[1.0],
                 ks=[1],
                 outpath=outpath,
-                additional_metrics_by_fuzzer=additional,
+                progress_metrics_by_fuzzer=progress,
             )
             report = outpath.read_text(encoding="utf-8")
 
-            self.assertIn("Additional metrics from logs", report)
+            self.assertIn("Progress metrics from logs", report)
             self.assertIn(
                 "| foundry | 1 | 0 | n/a | 1 | 280.00 [260.00,300.00] | 1 | 85.00 [80.00,90.00] | 1 | 66.00 [60.00,70.00] | 1 | 25.0% [20.0%,30.0%] |",
                 report,
@@ -195,8 +195,8 @@ class BenchmarkReportTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            additional_csv = tmp_dir / "additional_metrics_summary.csv"
-            additional_csv.write_text(
+            progress_csv = tmp_dir / "progress_metrics_summary.csv"
+            progress_csv.write_text(
                 "\n".join(
                     [
                         "fuzzer,runs,seqps_runs,coverage_runs,corpus_runs,favored_runs,failure_rate_runs,seqps_p50,seqps_p25,seqps_p75,coverage_p50,coverage_p25,coverage_p75,corpus_p50,corpus_p25,corpus_p75,favored_p50,favored_p25,favored_p75,failure_rate_p50,failure_rate_p25,failure_rate_p75",
@@ -219,15 +219,17 @@ class BenchmarkReportTests(unittest.TestCase):
                     str(out_dir),
                     "--throughput-summary-csv",
                     str(throughput_csv),
-                    "--additional-metrics-summary-csv",
-                    str(additional_csv),
+                    "--progress-metrics-summary-csv",
+                    str(progress_csv),
                 ]
             )
 
             report = (out_dir / "REPORT.md").read_text(encoding="utf-8")
             self.assertIn("## No data", report)
             self.assertIn("## Throughput metrics (if supported by log format)", report)
-            self.assertIn("## Additional metrics from logs (fuzzer-specific proxies)", report)
+            self.assertIn("## Progress metrics from logs (fuzzer-specific proxies)", report)
+            self.assertTrue((out_dir / "progress_metrics_levels.png").exists())
+            self.assertTrue((out_dir / "progress_metrics_availability.png").exists())
 
 
 if __name__ == "__main__":

@@ -711,8 +711,14 @@ def main() -> int:
         broken_md_key = f"{r.analysis_prefix}/broken_invariants.md"
         broken_csv_key = f"{r.analysis_prefix}/broken_invariants.csv"
         throughput_summary_csv_key = f"{r.analysis_prefix}/throughput_summary.csv"
-        additional_metrics_summary_csv_key = (
-            f"{r.analysis_prefix}/additional_metrics_summary.csv"
+        progress_metrics_summary_csv_key = (
+            f"{r.analysis_prefix}/progress_metrics_summary.csv"
+        )
+        progress_metrics_levels_chart_key = (
+            f"{r.analysis_prefix}/progress_metrics_levels.png"
+        )
+        progress_metrics_availability_chart_key = (
+            f"{r.analysis_prefix}/progress_metrics_availability.png"
         )
         runner_md_key = f"{r.analysis_prefix}/runner_resource_usage.md"
         runner_summary_csv_key = f"{r.analysis_prefix}/runner_resource_summary.csv"
@@ -736,9 +742,17 @@ def main() -> int:
             r.analysis_kind == "analysis"
             and head_exists(bucket, throughput_summary_csv_key, profile=profile)
         )
-        has_additional_metrics_summary_csv = (
+        has_progress_metrics_summary_csv = (
             r.analysis_kind == "analysis"
-            and head_exists(bucket, additional_metrics_summary_csv_key, profile=profile)
+            and head_exists(bucket, progress_metrics_summary_csv_key, profile=profile)
+        )
+        has_progress_metrics_levels_chart = (
+            r.analysis_kind == "analysis"
+            and head_exists(bucket, progress_metrics_levels_chart_key, profile=profile)
+        )
+        has_progress_metrics_availability_chart = (
+            r.analysis_kind == "analysis"
+            and head_exists(bucket, progress_metrics_availability_chart_key, profile=profile)
         )
         has_runner_md = (
             r.analysis_kind == "analysis" and head_exists(bucket, runner_md_key, profile=profile)
@@ -761,6 +775,12 @@ def main() -> int:
                 lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
                 lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
                 lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
+                if has_progress_metrics_levels_chart:
+                    lines.append(f"![Progress Metrics Levels]({analysis_base}/progress_metrics_levels.png)")
+                if has_progress_metrics_availability_chart:
+                    lines.append(
+                        f"![Progress Metrics Availability]({analysis_base}/progress_metrics_availability.png)"
+                    )
                 if has_invariant_chart:
                     lines.append(f"![Invariant Overlap (UpSet)]({analysis_base}/invariant_overlap_upset.png)")
                 if has_cpu_chart:
@@ -858,10 +878,10 @@ def main() -> int:
                 lines.append("- Broken invariants (CSV): " + f"{analysis_base}/broken_invariants.csv")
             if has_throughput_summary_csv:
                 lines.append("- Throughput summary (CSV): " + f"{analysis_base}/throughput_summary.csv")
-            if has_additional_metrics_summary_csv:
+            if has_progress_metrics_summary_csv:
                 lines.append(
-                    "- Additional metrics summary (CSV): "
-                    + f"{analysis_base}/additional_metrics_summary.csv"
+                    "- Progress metrics summary (CSV): "
+                    + f"{analysis_base}/progress_metrics_summary.csv"
                 )
             if has_runner_md:
                 lines.append("- Runner resource usage (Markdown): " + f"{analysis_base}/runner_resource_usage.md")

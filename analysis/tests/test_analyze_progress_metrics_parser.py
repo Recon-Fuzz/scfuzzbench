@@ -6,7 +6,7 @@ from pathlib import Path
 from analysis import analyze
 
 
-class AdditionalMetricsParserTests(unittest.TestCase):
+class ProgressMetricsParserTests(unittest.TestCase):
     def write_log(self, lines):
         tmp = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8")
         try:
@@ -17,14 +17,14 @@ class AdditionalMetricsParserTests(unittest.TestCase):
             tmp.close()
             raise
 
-    def test_parses_medusa_additional_metrics_from_actual_status_line(self):
+    def test_parses_medusa_progress_metrics_from_actual_status_line(self):
         log_path = self.write_log(
             [
                 "fuzz: elapsed: 6s, calls: 61658 (20486/sec), seq/s: 211, branches hit: 537, corpus: 137, failures: 15/762, gas/s: 4500638777",
             ]
         )
 
-        samples = analyze.parse_additional_metrics_log(
+        samples = analyze.parse_progress_metrics_log(
             log_path, "run-1", "i-1", "medusa-vtest"
         )
         self.assertEqual(len(samples), 1)
@@ -38,7 +38,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
         self.assertIsNone(sample.favored_items)
         self.assertAlmostEqual(sample.failure_rate, 15.0 / 762.0)
 
-    def test_parses_echidna_additional_metrics_from_actual_status_lines(self):
+    def test_parses_echidna_progress_metrics_from_actual_status_lines(self):
         log_path = self.write_log(
             [
                 "[2026-02-24 14:35:10.44] [status] tests: 4/14, fuzzing: 7098/50000, values: [], cov: 4474, corpus: 9, shrinking: W2:1247/5000(4) W1:3851/5000(2) W0:1666/5000(4), gas/s: 12935790057",
@@ -46,7 +46,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
             ]
         )
 
-        samples = analyze.parse_additional_metrics_log(
+        samples = analyze.parse_progress_metrics_log(
             log_path, "run-1", "i-1", "echidna-vtest"
         )
         self.assertEqual(len(samples), 2)
@@ -58,7 +58,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
         self.assertIsNone(samples[1].seq_per_second)
         self.assertIsNone(samples[1].failure_rate)
 
-    def test_parses_foundry_additional_metrics_from_json_metrics(self):
+    def test_parses_foundry_progress_metrics_from_json_metrics(self):
         log_path = self.write_log(
             [
                 '{"type":"invariant_metrics","timestamp":100,"invariant":"invariant_noop","failed_current":1,"failed_total":2,"metrics":{"cumulative_edges_seen":231,"cumulative_features_seen":0,"corpus_count":47,"favored_items":34}}',
@@ -66,7 +66,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
             ]
         )
 
-        samples = analyze.parse_additional_metrics_log(
+        samples = analyze.parse_progress_metrics_log(
             log_path, "run-1", "i-1", "foundry-git-test"
         )
         self.assertEqual(len(samples), 2)
@@ -78,9 +78,9 @@ class AdditionalMetricsParserTests(unittest.TestCase):
         self.assertAlmostEqual(samples[1].favored_items, 44.0)
         self.assertAlmostEqual(samples[1].failure_rate, 0.25)
 
-    def test_writes_additional_metrics_summary_csv_with_latest_run_values(self):
+    def test_writes_progress_metrics_summary_csv_with_latest_run_values(self):
         samples = [
-            analyze.AdditionalMetricsSample(
+            analyze.ProgressMetricsSample(
                 run_id="run-1",
                 instance_id="i-1",
                 fuzzer="medusa",
@@ -94,7 +94,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
                 source="text-metrics",
                 log_path="/tmp/medusa-1.log",
             ),
-            analyze.AdditionalMetricsSample(
+            analyze.ProgressMetricsSample(
                 run_id="run-1",
                 instance_id="i-1",
                 fuzzer="medusa",
@@ -108,7 +108,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
                 source="text-metrics",
                 log_path="/tmp/medusa-1.log",
             ),
-            analyze.AdditionalMetricsSample(
+            analyze.ProgressMetricsSample(
                 run_id="run-2",
                 instance_id="i-2",
                 fuzzer="medusa",
@@ -122,7 +122,7 @@ class AdditionalMetricsParserTests(unittest.TestCase):
                 source="text-metrics",
                 log_path="/tmp/medusa-2.log",
             ),
-            analyze.AdditionalMetricsSample(
+            analyze.ProgressMetricsSample(
                 run_id="run-3",
                 instance_id="i-3",
                 fuzzer="foundry",
@@ -139,8 +139,8 @@ class AdditionalMetricsParserTests(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as tmp:
-            out_path = Path(tmp) / "additional_metrics_summary.csv"
-            analyze.write_additional_metrics_summary_csv(samples, out_path)
+            out_path = Path(tmp) / "progress_metrics_summary.csv"
+            analyze.write_progress_metrics_summary_csv(samples, out_path)
 
             rows = {}
             with out_path.open("r", newline="") as handle:

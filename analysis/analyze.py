@@ -156,7 +156,7 @@ class ThroughputSample:
 
 
 @dataclass(frozen=True)
-class AdditionalMetricsSample:
+class ProgressMetricsSample:
     run_id: str
     instance_id: str
     fuzzer: str
@@ -347,7 +347,7 @@ def parse_throughput_from_payload(
     return tx_rate, gas_rate, source
 
 
-def parse_additional_metrics_from_payload(
+def parse_progress_metrics_from_payload(
     payload: Dict[str, Any],
 ) -> Tuple[
     Optional[float],
@@ -792,10 +792,10 @@ def parse_throughput_logs(logs_dir: Path, run_id: Optional[str]) -> List[Through
     return samples
 
 
-def parse_additional_metrics_log(
+def parse_progress_metrics_log(
     path: Path, run_id: str, instance_id: str, fuzzer_label: str
-) -> List[AdditionalMetricsSample]:
-    samples: List[AdditionalMetricsSample] = []
+) -> List[ProgressMetricsSample]:
+    samples: List[ProgressMetricsSample] = []
     first_ts: Optional[float] = None
     first_abs_ts: Optional[float] = None
     last_elapsed: Optional[float] = None
@@ -857,7 +857,7 @@ def parse_additional_metrics_log(
                     favored_items,
                     failure_rate,
                     source,
-                ) = parse_additional_metrics_from_payload(payload)
+                ) = parse_progress_metrics_from_payload(payload)
             else:
                 seq_per_second = parse_rate_from_text(clean_line, SEQ_RATE_PATTERNS)
                 coverage_proxy = parse_count_from_text(clean_line, COVERAGE_PATTERNS)
@@ -895,7 +895,7 @@ def parse_additional_metrics_log(
             previous_key = key
 
             samples.append(
-                AdditionalMetricsSample(
+                ProgressMetricsSample(
                     run_id=run_id,
                     instance_id=instance_id,
                     fuzzer=normalize_fuzzer(fuzzer_label),
@@ -913,10 +913,10 @@ def parse_additional_metrics_log(
     return samples
 
 
-def parse_additional_metrics_logs(
+def parse_progress_metrics_logs(
     logs_dir: Path, run_id: Optional[str]
-) -> List[AdditionalMetricsSample]:
-    samples: List[AdditionalMetricsSample] = []
+) -> List[ProgressMetricsSample]:
+    samples: List[ProgressMetricsSample] = []
     run_id_value = run_id or infer_run_id(logs_dir) or "unknown"
     for path in logs_dir.rglob("*"):
         if not path.is_file():
@@ -929,7 +929,7 @@ def parse_additional_metrics_logs(
         instance_label = rel.parts[0]
         instance_id, fuzzer_label = split_instance_label(instance_label)
         samples.extend(
-            parse_additional_metrics_log(path, run_id_value, instance_id, fuzzer_label)
+            parse_progress_metrics_log(path, run_id_value, instance_id, fuzzer_label)
         )
     return samples
 
@@ -1100,8 +1100,8 @@ def write_throughput_summary_csv(samples: Iterable[ThroughputSample], out_path: 
             )
 
 
-def write_additional_metrics_samples_csv(
-    samples: Iterable[AdditionalMetricsSample], out_path: Path
+def write_progress_metrics_samples_csv(
+    samples: Iterable[ProgressMetricsSample], out_path: Path
 ) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="") as handle:
@@ -1145,8 +1145,8 @@ def write_additional_metrics_samples_csv(
             )
 
 
-def write_additional_metrics_summary_csv(
-    samples: Iterable[AdditionalMetricsSample], out_path: Path
+def write_progress_metrics_summary_csv(
+    samples: Iterable[ProgressMetricsSample], out_path: Path
 ) -> None:
     per_fuzzer_runs: Dict[str, Dict[str, Dict[str, Optional[float]]]] = defaultdict(dict)
 
@@ -1433,7 +1433,7 @@ def main() -> int:
         out_dir: Path = args.out_dir
         events = parse_logs(args.logs_dir, args.run_id)
         throughput_samples = parse_throughput_logs(args.logs_dir, args.run_id)
-        additional_metrics_samples = parse_additional_metrics_logs(
+        progress_metrics_samples = parse_progress_metrics_logs(
             args.logs_dir, args.run_id
         )
         events_csv = out_dir / "events.csv"
@@ -1442,19 +1442,19 @@ def main() -> int:
         exclusive_csv = out_dir / "exclusive.csv"
         throughput_samples_csv = out_dir / "throughput_samples.csv"
         throughput_summary_csv = out_dir / "throughput_summary.csv"
-        additional_metrics_samples_csv = out_dir / "additional_metrics_samples.csv"
-        additional_metrics_summary_csv = out_dir / "additional_metrics_summary.csv"
+        progress_metrics_samples_csv = out_dir / "progress_metrics_samples.csv"
+        progress_metrics_summary_csv = out_dir / "progress_metrics_summary.csv"
         write_events_csv(events, events_csv)
         write_summary_csv(events, summary_csv)
         write_overlap_csv(events, overlap_csv)
         write_exclusive_csv(events, exclusive_csv)
         write_throughput_samples_csv(throughput_samples, throughput_samples_csv)
         write_throughput_summary_csv(throughput_samples, throughput_summary_csv)
-        write_additional_metrics_samples_csv(
-            additional_metrics_samples, additional_metrics_samples_csv
+        write_progress_metrics_samples_csv(
+            progress_metrics_samples, progress_metrics_samples_csv
         )
-        write_additional_metrics_summary_csv(
-            additional_metrics_samples, additional_metrics_summary_csv
+        write_progress_metrics_summary_csv(
+            progress_metrics_samples, progress_metrics_summary_csv
         )
         return 0
     return 1

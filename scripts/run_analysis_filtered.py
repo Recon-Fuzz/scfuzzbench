@@ -24,7 +24,7 @@ def main() -> int:
     exclude = {item.strip().lower() for item in args.exclude_fuzzers.split(",") if item.strip()}
     events = analyze.parse_logs(args.logs_dir, args.run_id)
     throughput_samples = analyze.parse_throughput_logs(args.logs_dir, args.run_id)
-    additional_metrics_samples = analyze.parse_additional_metrics_logs(
+    progress_metrics_samples = analyze.parse_progress_metrics_logs(
         args.logs_dir, args.run_id
     )
     if exclude:
@@ -38,9 +38,9 @@ def main() -> int:
             for sample in throughput_samples
             if sample.fuzzer.lower() not in exclude and sample.fuzzer_label.lower() not in exclude
         ]
-        additional_metrics_samples = [
+        progress_metrics_samples = [
             sample
-            for sample in additional_metrics_samples
+            for sample in progress_metrics_samples
             if sample.fuzzer.lower() not in exclude and sample.fuzzer_label.lower() not in exclude
         ]
 
@@ -51,11 +51,11 @@ def main() -> int:
     analyze.write_exclusive_csv(events, args.out_dir / "exclusive.csv")
     analyze.write_throughput_samples_csv(throughput_samples, args.out_dir / "throughput_samples.csv")
     analyze.write_throughput_summary_csv(throughput_samples, args.out_dir / "throughput_summary.csv")
-    analyze.write_additional_metrics_samples_csv(
-        additional_metrics_samples, args.out_dir / "additional_metrics_samples.csv"
+    analyze.write_progress_metrics_samples_csv(
+        progress_metrics_samples, args.out_dir / "progress_metrics_samples.csv"
     )
-    analyze.write_additional_metrics_summary_csv(
-        additional_metrics_samples, args.out_dir / "additional_metrics_summary.csv"
+    analyze.write_progress_metrics_summary_csv(
+        progress_metrics_samples, args.out_dir / "progress_metrics_summary.csv"
     )
     return 0
 
