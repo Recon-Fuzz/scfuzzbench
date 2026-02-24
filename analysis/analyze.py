@@ -24,10 +24,17 @@ ECHIDNA_FAILED_RE = re.compile(r"^([A-Za-z0-9_]+)\([^)]*\):\s+failed!")
 TX_RATE_PATTERNS = [
     re.compile(r"(?i)(?:tx|txn|transactions?|calls?)\s*(?:/|per)\s*s(?:ec(?:ond)?)?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)"),
     re.compile(r"(?i)([0-9]+(?:\.[0-9]+)?)\s*(?:tx|txn|transactions?|calls?)\s*/\s*s(?:ec(?:ond)?)?\b"),
+    re.compile(r"(?i)calls?\s*:\s*[0-9]+(?:\.[0-9]+)?\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*s(?:ec(?:ond)?)?\s*\)"),
 ]
 GAS_RATE_PATTERNS = [
     re.compile(r"(?i)gas\s*(?:/|per)\s*s(?:ec(?:ond)?)?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)"),
     re.compile(r"(?i)([0-9]+(?:\.[0-9]+)?)\s*gas\s*/\s*s(?:ec(?:ond)?)?\b"),
+]
+TEXT_TX_COUNT_PATTERNS = [
+    re.compile(r"(?i)\bfuzzing:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*[0-9]+"),
+]
+TEXT_GAS_COUNT_PATTERNS = [
+    re.compile(r"(?i)\bgas\s*:\s*([0-9]+(?:\.[0-9]+)?)"),
 ]
 
 TX_RATE_KEYS = (
@@ -209,6 +216,17 @@ def pick_metric_value(metric_values: Dict[str, float], keys: Tuple[str, ...]) ->
 
 
 def parse_rate_from_text(line: str, patterns: List[re.Pattern[str]]) -> Optional[float]:
+    for pattern in patterns:
+        match = pattern.search(line)
+        if not match:
+            continue
+        value = parse_optional_float(match.group(1))
+        if value is not None:
+            return value
+    return None
+
+
+def parse_count_from_text(line: str, patterns: List[re.Pattern[str]]) -> Optional[float]:
     for pattern in patterns:
         match = pattern.search(line)
         if not match:
@@ -513,12 +531,19 @@ def parse_throughput_log(
 ) -> List[ThroughputSample]:
     samples: List[ThroughputSample] = []
     first_ts: Optional[float] = None
+    first_abs_ts: Optional[float] = None
     last_elapsed: Optional[float] = None
     previous_key: Optional[Tuple[float, Optional[float], Optional[float]]] = None
 
     with path.open("r", errors="ignore") as handle:
         for line in handle:
             clean_line = ANSI_ESCAPE_RE.sub("", line)
+
+            absolute_ts = parse_timestamp(clean_line)
+            if absolute_ts is not None:
+                if first_abs_ts is None:
+                    first_abs_ts = absolute_ts
+                last_elapsed = max(0.0, absolute_ts - first_abs_ts)
 
             elapsed_match = MEDUSA_ELAPSED_RE.search(clean_line)
             if elapsed_match:
@@ -551,8 +576,17 @@ def parse_throughput_log(
             else:
                 tx_rate = parse_rate_from_text(clean_line, TX_RATE_PATTERNS)
                 gas_rate = parse_rate_from_text(clean_line, GAS_RATE_PATTERNS)
+                if elapsed_seconds is not None and elapsed_seconds > 0.0:
+                    tx_count = parse_count_from_text(clean_line, TEXT_TX_COUNT_PATTERNS)
+                    gas_count = parse_count_from_text(clean_line, TEXT_GAS_COUNT_PATTERNS)
+                    if tx_rate is None and tx_count is not None:
+                        tx_rate = tx_count / elapsed_seconds
+                        source = "text-cumulative"
+                    if gas_rate is None and gas_count is not None:
+                        gas_rate = gas_count / elapsed_seconds
+                        source = "text-cumulative"
                 if tx_rate is not None or gas_rate is not None:
-                    source = "text-rate"
+                    source = source or "text-rate"
 
             if tx_rate is None and gas_rate is None:
                 continue
