@@ -7,8 +7,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import sys
 import textwrap
 from typing import Dict, List, Optional, Tuple
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import matplotlib
 
@@ -18,17 +23,13 @@ from matplotlib.patches import Circle
 import numpy as np
 import pandas as pd
 
-REQUIRED_COLS = {"fuzzer", "event", "elapsed_seconds"}
-
-MIN_RUNS_PER_FUZZER = 10
-MIN_BUDGET_HOURS = 24.0
-TRIAL_RUN_WARNING = (
-    "**Warning — trial run.** "
-    "This benchmark was executed with fewer than {n} instances per fuzzer and/or "
-    "a time budget shorter than {t}h. "
-    "Results from trial runs are meant for debugging purposes and are "
-    "not valid for extracting conclusions across different fuzzers."
+from analysis.trial_run import (
+    MIN_BUDGET_HOURS,
+    MIN_RUNS_PER_FUZZER,
+    format_trial_run_warning,
 )
+
+REQUIRED_COLS = {"fuzzer", "event", "elapsed_seconds"}
 OPTIONAL_ID_COLS = ("run_id", "instance_id")
 QUALIFIED_EVENT_RE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_$]*\.)+(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?)$"
@@ -232,9 +233,7 @@ def write_md_report(
     if runs_per_fuzzer and min(runs_per_fuzzer) < MIN_RUNS_PER_FUZZER:
         is_trial = True
     if is_trial:
-        lines.append(
-            "> " + TRIAL_RUN_WARNING.format(n=MIN_RUNS_PER_FUZZER, t=int(MIN_BUDGET_HOURS))
-        )
+        lines.append("> " + format_trial_run_warning())
         lines.append("")
 
     if not result.invariants:
