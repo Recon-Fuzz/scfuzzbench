@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import itertools
 import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -17,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from analysis.trial_run import format_trial_run_warning, is_trial_run
 
@@ -129,6 +131,20 @@ class FuzzerMetrics:
     success_rate_k: Dict[int, float]
     final_p50: int
     final_iqr: float
+    final_values: np.ndarray = None  # type: ignore[assignment]
+
+
+@dataclass
+class PairwiseResult:
+    fuzzer_a: str
+    fuzzer_b: str
+    u_stat: float
+    p_value: float
+    p_corrected: float
+    significant: bool
+    direction: str
+    median_a: float
+    median_b: float
 
 
 @dataclass
@@ -782,6 +798,7 @@ def compute_metrics(
                 success_rate_k=success_rate_k,
                 final_p50=final_p50,
                 final_iqr=final_iqr,
+                final_values=final_values,
             )
         )
     return metrics
@@ -936,6 +953,195 @@ def plot_plateau_and_late_share(
     plt.close()
 
 
+def compute_statistical_tests(
+    metrics: List[FuzzerMetrics], alpha: float = 0.05
+) -> Tuple[List[PairwiseResult], List[str]]:
+    results: List[PairwiseResult] = []
+    warn: List[str] = []
+
+    if len(metrics) < 2:
+        warn.append("Only one fuzzer present; skipping pairwise statistical tests.")
+        return results, warn
+
+    small_sample = False
+    for m in metrics:
+        if m.final_values is not None and len(m.final_values) < 5:
+            small_sample = True
+
+    if small_sample:
+        warn.append(
+            "One or more fuzzers have fewer than 5 runs. "
+            "Statistical power may be limited."
+        )
+
+    pairs = list(itertools.combinations(metrics, 2))
+    n_comparisons = len(pairs)
+
+    for m_a, m_b in pairs:
+        a = m_a.final_values
+        b = m_b.final_values
+
+        if a is None or b is None or len(a) < 2 or len(b) < 2:
+            warn.append(
+                f"Skipping {m_a.fuzzer} vs {m_b.fuzzer}: fewer than 2 runs."
+            )
+            continue
+
+        median_a = float(np.median(a))
+        median_b = float(np.median(b))
+
+        # Identical constant arrays: scipy raises ValueError
+        if np.array_equal(a, b) or (np.all(a == a[0]) and np.all(b == b[0]) and a[0] == b[0]):
+            results.append(
+                PairwiseResult(
+                    fuzzer_a=m_a.fuzzer,
+                    fuzzer_b=m_b.fuzzer,
+                    u_stat=float(len(a) * len(b)) / 2.0,
+                    p_value=1.0,
+                    p_corrected=1.0,
+                    significant=False,
+                    direction="=",
+                    median_a=median_a,
+                    median_b=median_b,
+                )
+            )
+            continue
+
+        u_stat, p_value = stats.mannwhitneyu(a, b, alternative="two-sided")
+        p_corrected = min(p_value * n_comparisons, 1.0)
+        significant = p_corrected < alpha
+
+        if median_a > median_b:
+            direction = ">"
+        elif median_a < median_b:
+            direction = "<"
+        else:
+            direction = "="
+
+        results.append(
+            PairwiseResult(
+                fuzzer_a=m_a.fuzzer,
+                fuzzer_b=m_b.fuzzer,
+                u_stat=float(u_stat),
+                p_value=float(p_value),
+                p_corrected=float(p_corrected),
+                significant=significant,
+                direction=direction,
+                median_a=median_a,
+                median_b=median_b,
+            )
+        )
+
+    return results, warn
+
+
+def format_statistical_report(
+    results: List[PairwiseResult],
+    warnings_list: List[str],
+    alpha: float = 0.05,
+) -> List[str]:
+    lines: List[str] = []
+    lines.append("## Statistical comparison (Mann-Whitney U test)")
+    lines.append("")
+
+    n_comparisons = len(results)
+    lines.append(
+        "Pairwise Mann-Whitney U tests on end-of-budget bug counts (two-sided)."
+    )
+    lines.append(
+        f"Bonferroni correction applied for {n_comparisons} comparison(s). "
+        f"Significance level: alpha = {alpha}."
+    )
+    lines.append("")
+
+    if warnings_list:
+        for w in warnings_list:
+            lines.append(f"**Warning:** {w}")
+        lines.append("")
+
+    if results:
+        header = [
+            "Fuzzer A",
+            "Fuzzer B",
+            "Median A",
+            "Median B",
+            "U statistic",
+            "p-value",
+            "p (corrected)",
+            "Significant",
+        ]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "|".join(["---"] * len(header)) + "|")
+        for r in results:
+            med_a = (
+                str(int(r.median_a))
+                if r.median_a == int(r.median_a)
+                else f"{r.median_a:.1f}"
+            )
+            med_b = (
+                str(int(r.median_b))
+                if r.median_b == int(r.median_b)
+                else f"{r.median_b:.1f}"
+            )
+            sig_str = "yes" if r.significant else "no"
+            lines.append(
+                f"| {r.fuzzer_a} | {r.fuzzer_b} | {med_a} | {med_b} "
+                f"| {r.u_stat:.1f} | {r.p_value:.4f} | {r.p_corrected:.4f} | {sig_str} |"
+            )
+        lines.append("")
+
+        significant_results = [r for r in results if r.significant]
+        if significant_results:
+            lines.append("**Conclusions:**")
+            lines.append("")
+            for r in significant_results:
+                med_a = (
+                    str(int(r.median_a))
+                    if r.median_a == int(r.median_a)
+                    else f"{r.median_a:.1f}"
+                )
+                med_b = (
+                    str(int(r.median_b))
+                    if r.median_b == int(r.median_b)
+                    else f"{r.median_b:.1f}"
+                )
+                if r.direction == ">":
+                    lines.append(
+                        f"- With p < {alpha}, {r.fuzzer_a} finds significantly more bugs "
+                        f"than {r.fuzzer_b} (median {med_a} vs {med_b})."
+                    )
+                elif r.direction == "<":
+                    lines.append(
+                        f"- With p < {alpha}, {r.fuzzer_b} finds significantly more bugs "
+                        f"than {r.fuzzer_a} (median {med_b} vs {med_a})."
+                    )
+                else:
+                    lines.append(
+                        f"- With p < {alpha}, {r.fuzzer_a} and {r.fuzzer_b} differ significantly "
+                        f"(both median {med_a}), likely due to distributional differences."
+                    )
+            lines.append("")
+        else:
+            lines.append(
+                "No pairwise comparison reached significance after Bonferroni correction."
+            )
+            lines.append("")
+
+    lines.append(
+        "> **Note:** The Mann-Whitney U test assesses whether one fuzzer tends to find"
+    )
+    lines.append(
+        "> more bugs than another across runs. It does not measure effect size or"
+    )
+    lines.append(
+        "> practical importance. Small sample sizes (fewer than 5 runs) reduce"
+    )
+    lines.append("> statistical power.")
+    lines.append("")
+
+    return lines
+
+
 def fmt_time(value: float) -> str:
     if not math.isfinite(value):
         return "inf"
@@ -950,6 +1156,9 @@ def write_report(
     outpath: Path,
     throughput_by_fuzzer: Dict[str, ThroughputSummary] | None = None,
     progress_metrics_by_fuzzer: Dict[str, ProgressMetricsSummary] | None = None,
+    stat_results: Optional[List[PairwiseResult]] = None,
+    stat_warnings: Optional[List[str]] = None,
+    alpha: float = 0.05,
 ) -> None:
     lines: List[str] = []
     lines.append("# Fuzzer Benchmark Report (from bug-count CSV)")
@@ -1030,6 +1239,13 @@ def write_report(
         progress_metrics_by_fuzzer or {},
         fuzzer_order=[metric.fuzzer for metric in metrics],
     )
+
+    if stat_results is not None:
+        lines.extend(
+            format_statistical_report(
+                stat_results, stat_warnings or [], alpha=alpha
+            )
+        )
 
     lines.append("## Shape-based interpretation (rules of thumb)")
     lines.append(
@@ -1272,6 +1488,7 @@ def main() -> int:
     df_grid = resample_to_grid(df, grid)
     metrics = compute_metrics(df_grid, budget=budget, checkpoints=checkpoints, ks=ks)
     metrics = sorted(metrics, key=lambda m: (m.final_p50, m.auc_norm), reverse=True)
+    stat_results, stat_warnings = compute_statistical_tests(metrics)
 
     label_map = None
     if args.anonymize:
@@ -1308,6 +1525,8 @@ def main() -> int:
         outpath=report_outdir / "REPORT.md",
         throughput_by_fuzzer=throughput_by_fuzzer,
         progress_metrics_by_fuzzer=progress_metrics_by_fuzzer,
+        stat_results=stat_results,
+        stat_warnings=stat_warnings,
     )
 
     print(f"wrote: {report_outdir / 'REPORT.md'}")
