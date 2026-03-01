@@ -810,18 +810,18 @@ def main() -> int:
                 lines.append(f"![Time To K]({analysis_base}/time_to_k.png)")
                 lines.append(f"![Final Distribution]({analysis_base}/final_distribution.png)")
                 lines.append(f"![Plateau And Late Share]({analysis_base}/plateau_and_late_share.png)")
-                if has_txps_over_time_chart:
-                    lines.append(f"![Tx/s Over Time]({analysis_base}/tx_per_second_over_time.png)")
-                if has_gasps_over_time_chart:
-                    lines.append(f"![Gas/s Over Time]({analysis_base}/gas_per_second_over_time.png)")
-                if has_seqps_over_time_chart:
-                    lines.append(f"![Seq/s Over Time]({analysis_base}/seq_per_second_over_time.png)")
+                if has_invariant_chart:
+                    lines.append(f"![Invariant Overlap (UpSet)]({analysis_base}/invariant_overlap_upset.png)")
                 if has_coverage_over_time_chart:
                     lines.append(f"![Coverage Over Time]({analysis_base}/coverage_proxy_over_time.png)")
                 if has_corpus_over_time_chart:
                     lines.append(f"![Corpus Size Over Time]({analysis_base}/corpus_size_over_time.png)")
-                if has_invariant_chart:
-                    lines.append(f"![Invariant Overlap (UpSet)]({analysis_base}/invariant_overlap_upset.png)")
+                if has_seqps_over_time_chart:
+                    lines.append(f"![Seq/s Over Time]({analysis_base}/seq_per_second_over_time.png)")
+                if has_txps_over_time_chart:
+                    lines.append(f"![Tx/s Over Time]({analysis_base}/tx_per_second_over_time.png)")
+                if has_gasps_over_time_chart:
+                    lines.append(f"![Gas/s Over Time]({analysis_base}/gas_per_second_over_time.png)")
                 if has_cpu_chart:
                     lines.append(f"![CPU Usage Over Time]({analysis_base}/cpu_usage_over_time.png)")
                 if has_memory_chart:
