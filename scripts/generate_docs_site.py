@@ -701,6 +701,27 @@ def main() -> int:
             lines.append(":::")
             lines.append("")
 
+        instances = m.get("instances_per_fuzzer")
+        is_trial = False
+        if r.timeout_hours < 24:
+            is_trial = True
+        if instances is not None:
+            try:
+                if int(instances) < 10:
+                    is_trial = True
+            except (TypeError, ValueError):
+                pass
+        if is_trial:
+            lines.append("::: warning Trial run")
+            lines.append(
+                "This benchmark was executed with fewer than 10 instances per fuzzer and/or "
+                "a time budget shorter than 24h. "
+                "Results from trial runs are meant for debugging purposes and are "
+                "not valid for extracting conclusions across different fuzzers."
+            )
+            lines.append(":::")
+            lines.append("")
+
         base_url = f"https://{bucket}.s3.{region}.amazonaws.com"
         analysis_base = f"{base_url}/{r.analysis_prefix}"
         logs_base = f"{base_url}/logs/{r.run_id}/{r.benchmark_uuid}"

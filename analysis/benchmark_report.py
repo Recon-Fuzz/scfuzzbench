@@ -15,6 +15,16 @@ import numpy as np
 import pandas as pd
 
 REQUIRED_COLS = ["fuzzer", "run_id", "time_hours", "bugs_found"]
+
+MIN_RUNS_PER_FUZZER = 10
+MIN_BUDGET_HOURS = 24.0
+TRIAL_RUN_WARNING = (
+    "**Warning — trial run.** "
+    "This benchmark was executed with fewer than {n} instances per fuzzer and/or "
+    "a time budget shorter than {t}h. "
+    "Results from trial runs are meant for debugging purposes and are "
+    "not valid for extracting conclusions across different fuzzers."
+)
 REQUIRED_SAMPLE_BASE_COLS = ["fuzzer", "run_id", "instance_id", "elapsed_seconds"]
 THROUGHPUT_SAMPLE_VALUE_COLS = ["tx_per_second", "gas_per_second"]
 PROGRESS_SAMPLE_VALUE_COLS = [
@@ -28,6 +38,21 @@ PROGRESS_SAMPLE_VALUE_COLS = [
 
 def die(msg: str) -> None:
     raise SystemExit(f"error: {msg}")
+
+
+def is_trial_run(budget: float, runs_per_fuzzer: List[int]) -> bool:
+    if budget < MIN_BUDGET_HOURS:
+        return True
+    if runs_per_fuzzer and min(runs_per_fuzzer) < MIN_RUNS_PER_FUZZER:
+        return True
+    return False
+
+
+def append_trial_run_warning(lines: List[str]) -> None:
+    lines.append(
+        "> " + TRIAL_RUN_WARNING.format(n=MIN_RUNS_PER_FUZZER, t=int(MIN_BUDGET_HOURS))
+    )
+    lines.append("")
 
 
 def load_csv(path: Path) -> pd.DataFrame:
@@ -973,6 +998,8 @@ def write_report(
     lines.append("")
     lines.append(f"- Time budget: **{budget:.2f}h**")
     lines.append("")
+    if is_trial_run(budget, [m.runs for m in metrics]):
+        append_trial_run_warning(lines)
     lines.append("## Executive summary")
     lines.append(
         "This report is derived solely from cumulative bugs-found over time across repeated runs per fuzzer. "
@@ -1088,6 +1115,8 @@ def write_no_data_report(
     lines.append(f"- Time budget: **{budget:.2f}h**")
     lines.append(f"- Source CSV: `{csv_path}`")
     lines.append("")
+    if is_trial_run(budget, []):
+        append_trial_run_warning(lines)
     lines.append("## No data")
     lines.append("")
     lines.append(
