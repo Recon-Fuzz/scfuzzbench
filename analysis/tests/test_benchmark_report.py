@@ -4,7 +4,30 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from analysis import benchmark_report
+
+
+def _make_metrics(fuzzer, final_values, runs=None, **kwargs):
+    vals = np.array(final_values, dtype=float)
+    defaults = dict(
+        fuzzer=fuzzer,
+        runs=runs if runs is not None else len(vals),
+        bugs_p50_t={1.0: int(np.median(vals))},
+        bugs_p25_t={1.0: int(np.percentile(vals, 25))},
+        bugs_p75_t={1.0: int(np.percentile(vals, 75))},
+        auc_norm=0.5,
+        plateau_time=0.5,
+        late_share=0.1,
+        time_to_k_p50={1: 0.5},
+        success_rate_k={1: 1.0},
+        final_p50=int(np.median(vals)),
+        final_iqr=float(np.percentile(vals, 75) - np.percentile(vals, 25)),
+        final_values=vals,
+    )
+    defaults.update(kwargs)
+    return benchmark_report.FuzzerMetrics(**defaults)
 
 
 class BenchmarkReportTests(unittest.TestCase):
@@ -309,6 +332,149 @@ class BenchmarkReportTests(unittest.TestCase):
             self.assertTrue((out_dir / "corpus_size_over_time.png").exists())
             self.assertTrue((out_dir / "favored_items_over_time.png").exists())
             self.assertTrue((out_dir / "failure_rate_over_time.png").exists())
+
+
+class StatisticalTestsTests(unittest.TestCase):
+    def test_significant_difference(self):
+        m_a = _make_metrics("echidna", [7, 8, 7, 8, 7, 8, 7, 8, 7, 8])
+        m_b = _make_metrics("medusa", [2, 3, 3, 2, 3, 2, 3, 2, 3, 2])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].significant)
+        self.assertEqual(results[0].direction, ">")
+        self.assertLess(results[0].p_corrected, 0.05)
+
+    def test_identical_distributions(self):
+        vals = [5, 5, 5, 5, 5]
+        m_a = _make_metrics("fuzzer_a", vals)
+        m_b = _make_metrics("fuzzer_b", vals)
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].significant)
+        self.assertEqual(results[0].p_value, 1.0)
+        self.assertEqual(results[0].direction, "=")
+
+    def test_single_fuzzer_returns_empty(self):
+        m = _make_metrics("only_one", [5, 6, 7])
+        results, warnings = benchmark_report.compute_statistical_tests([m])
+        self.assertEqual(len(results), 0)
+        self.assertTrue(any("Only one fuzzer" in w for w in warnings))
+
+    def test_small_sample_warning(self):
+        m_a = _make_metrics("a", [5, 6, 7])
+        m_b = _make_metrics("b", [3, 4, 5])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        self.assertTrue(any("fewer than 5 runs" in w for w in warnings))
+
+    def test_bonferroni_correction(self):
+        m_a = _make_metrics("a", [7, 8, 7, 8, 7, 8, 7, 8])
+        m_b = _make_metrics("b", [2, 3, 2, 3, 2, 3, 2, 3])
+        m_c = _make_metrics("c", [5, 5, 5, 5, 5, 5, 5, 5])
+        results, _ = benchmark_report.compute_statistical_tests([m_a, m_b, m_c])
+        # 3 pairwise comparisons
+        self.assertEqual(len(results), 3)
+        for r in results:
+            # p_corrected should be p_value * 3, clamped to 1.0
+            expected = min(r.p_value * 3, 1.0)
+            self.assertAlmostEqual(r.p_corrected, expected, places=10)
+
+    def test_fewer_than_2_runs_skipped(self):
+        m_a = _make_metrics("a", [5])
+        m_b = _make_metrics("b", [3, 4, 5])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        self.assertEqual(len(results), 0)
+        self.assertTrue(any("fewer than 2 runs" in w for w in warnings))
+
+    def test_natural_language_conclusions(self):
+        m_a = _make_metrics("echidna", [7, 8, 7, 8, 7, 8, 7, 8, 7, 8])
+        m_b = _make_metrics("medusa", [2, 3, 3, 2, 3, 2, 3, 2, 3, 2])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        lines = benchmark_report.format_statistical_report(results, warnings)
+        text = "\n".join(lines)
+        self.assertIn("echidna finds significantly more bugs than medusa", text)
+
+    def test_no_significant_fallback_text(self):
+        m_a = _make_metrics("a", [5, 5, 5, 5, 5])
+        m_b = _make_metrics("b", [5, 5, 5, 5, 5])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+        lines = benchmark_report.format_statistical_report(results, warnings)
+        text = "\n".join(lines)
+        self.assertIn("No pairwise comparison reached significance", text)
+
+    def test_write_report_integration(self):
+        m_a = _make_metrics("echidna", [7, 8, 7, 8, 7, 8, 7, 8, 7, 8])
+        m_b = _make_metrics("medusa", [2, 3, 3, 2, 3, 2, 3, 2, 3, 2])
+        results, warnings = benchmark_report.compute_statistical_tests([m_a, m_b])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outpath = Path(tmp) / "REPORT.md"
+            benchmark_report.write_report(
+                metrics=[m_a, m_b],
+                budget=1.0,
+                checkpoints=[1.0],
+                ks=[1],
+                outpath=outpath,
+                stat_results=results,
+                stat_warnings=warnings,
+            )
+            report = outpath.read_text(encoding="utf-8")
+            self.assertIn("## Statistical comparison (Mann-Whitney U test)", report)
+            self.assertIn("Mann-Whitney U test assesses", report)
+            # Should appear after Milestones and before Shape-based
+            milestones_pos = report.index("## Milestones")
+            stat_pos = report.index("## Statistical comparison")
+            shape_pos = report.index("## Shape-based interpretation")
+            self.assertLess(milestones_pos, stat_pos)
+            self.assertLess(stat_pos, shape_pos)
+
+    def test_write_report_no_stat_section_when_none(self):
+        m = _make_metrics("foundry", [1])
+        with tempfile.TemporaryDirectory() as tmp:
+            outpath = Path(tmp) / "REPORT.md"
+            benchmark_report.write_report(
+                metrics=[m],
+                budget=1.0,
+                checkpoints=[1.0],
+                ks=[1],
+                outpath=outpath,
+            )
+            report = outpath.read_text(encoding="utf-8")
+            self.assertNotIn("## Statistical comparison", report)
+
+    def test_cli_end_to_end_with_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            csv_path = tmp_dir / "cumulative.csv"
+            rows = ["fuzzer,run_id,time_hours,bugs_found"]
+            for i in range(1, 6):
+                rows.append(f"echidna,run-{i},0,0")
+                rows.append(f"echidna,run-{i},1,{6 + i}")
+                rows.append(f"medusa,run-{i},0,0")
+                rows.append(f"medusa,run-{i},1,{i}")
+            csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+            out_dir = tmp_dir / "out"
+            script = Path(__file__).resolve().parents[1] / "benchmark_report.py"
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    str(script),
+                    "--csv",
+                    str(csv_path),
+                    "--outdir",
+                    str(out_dir),
+                    "--budget",
+                    "1",
+                    "--checkpoints",
+                    "1",
+                    "--ks",
+                    "1",
+                ]
+            )
+            report = (out_dir / "REPORT.md").read_text(encoding="utf-8")
+            self.assertIn("## Statistical comparison (Mann-Whitney U test)", report)
+            self.assertIn("echidna", report)
+            self.assertIn("medusa", report)
 
 
 if __name__ == "__main__":
