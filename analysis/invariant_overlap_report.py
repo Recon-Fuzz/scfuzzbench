@@ -445,7 +445,7 @@ def plot_upset(result: OverlapResult, out_png: Path, *, top_k: int) -> None:
 
     detail_entries = [
         (
-            f"[{combo_id(combo)}] {combo_label(combo)} ({len(invariants)})",
+            f"{combo_label(combo)} ({len(invariants)})",
             invariants,
         )
         for combo, invariants in intersections
