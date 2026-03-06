@@ -124,13 +124,9 @@ is_sensitive_arg_name() {
   return 1
 }
 
-redact_url_userinfo() {
+is_url_like_value() {
   local value="${1:-}"
-  if [[ "${value}" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]+@(.+)$ ]]; then
-    echo "${BASH_REMATCH[1]}***@${BASH_REMATCH[2]}"
-    return 0
-  fi
-  echo "${value}"
+  [[ "${value}" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]]
 }
 
 sanitize_command_for_log() {
@@ -145,13 +141,11 @@ sanitize_command_for_log() {
       continue
     fi
 
-    arg=$(redact_url_userinfo "${arg}")
-
     if [[ "${arg}" == --*=* ]]; then
       key="${arg%%=*}"
-      value=$(redact_url_userinfo "${arg#*=}")
+      value="${arg#*=}"
       normalized="${key#--}"
-      if is_sensitive_arg_name "${normalized}"; then
+      if is_sensitive_arg_name "${normalized}" || is_url_like_value "${value}"; then
         sanitized+=("${key}=***")
       else
         sanitized+=("${key}=${value}")
@@ -161,8 +155,8 @@ sanitize_command_for_log() {
 
     if [[ "${arg}" == *=* && "${arg}" != -* ]]; then
       key="${arg%%=*}"
-      value=$(redact_url_userinfo "${arg#*=}")
-      if is_sensitive_arg_name "${key}"; then
+      value="${arg#*=}"
+      if is_sensitive_arg_name "${key}" || is_url_like_value "${value}"; then
         sanitized+=("${key}=***")
       else
         sanitized+=("${key}=${value}")
@@ -185,6 +179,11 @@ sanitize_command_for_log() {
         redact_next=1
       fi
       sanitized+=("${arg}")
+      continue
+    fi
+
+    if is_url_like_value "${arg}"; then
+      sanitized+=("***")
       continue
     fi
 

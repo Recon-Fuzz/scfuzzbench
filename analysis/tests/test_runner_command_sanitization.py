@@ -35,11 +35,18 @@ class RunnerCommandSanitizationTests(unittest.TestCase):
             "test",
             "--rpc-url=https://user:pass@example.test",
         )
-        self.assertIn(
-            "--rpc-url=https://***@example.test",
-            rendered,
-        )
+        self.assertIn("--rpc-url=***", rendered)
         self.assertNotIn("user:pass@", rendered)
+        self.assertNotIn("example.test", rendered)
+
+    def test_redacts_bare_url_arguments(self):
+        rendered = self.sanitize(
+            "echidna-test",
+            "https://rpc.example.test",
+            "--workers",
+            "16",
+        )
+        self.assertIn("echidna-test *** --workers 16", rendered)
 
 
 if __name__ == "__main__":
