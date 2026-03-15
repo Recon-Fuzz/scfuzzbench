@@ -98,6 +98,58 @@ Destroy infra while preserving data bucket:
 make terraform-destroy-infra
 ```
 
+## Local Mode
+
+You can run fuzzers locally without AWS infrastructure using `scripts/local-run.sh`. This is useful for development, debugging harnesses, or comparing fuzzer configurations on a single machine.
+
+### Prerequisites
+
+- The fuzzer binary must already be installed (e.g. `echidna-test` in `$PATH`)
+- Foundry must be installed (`forge`, `cast`)
+- `zip` must be available for result packaging
+
+### Usage
+
+```bash
+scripts/local-run.sh \
+  -f echidna \
+  -r https://github.com/org/target-repo \
+  -b main \
+  -t 3600 \
+  -w 4 \
+  --echidna-config echidna.yaml \
+  --echidna-target test/recon/CryticTester.sol \
+  --echidna-contract CryticTester
+```
+
+Required flags:
+- `-f, --fuzzer`: `echidna`, `medusa`, `foundry`, or `echidna-symexec`
+- `-r, --repo`: target git repository URL
+- `-b, --branch`: branch or commit to check out
+
+Optional flags:
+- `-t, --timeout`: campaign timeout in seconds (default: 86400)
+- `-w, --workers`: number of fuzzer workers
+- `-T, --type`: `property` or `optimization` (default: `property`)
+- `--install`: run the fuzzer's `install.sh` first
+- `--echidna-extra-args`: extra arguments passed to echidna (e.g. `"--server 3000 --shrink-limit 1"`)
+
+All fuzzer-specific flags (`--echidna-*`, `--medusa-*`, `--foundry-*`) mirror the environment variables documented in `fuzzers/README.md`.
+
+### How it works
+
+Local mode sets `SCFUZZBENCH_LOCAL_MODE=1`, which changes common.sh behavior:
+
+- **Workspace**: `~/.scfuzzbench/` instead of `/opt/scfuzzbench/`
+- **Binaries**: `~/.local/bin/` instead of `/usr/local/bin/`
+- **No shutdown**: instance shutdown is suppressed
+- **No S3 upload**: results are saved locally to `~/.scfuzzbench/output/<repo>/<fuzzer>/<timestamp>/`
+- **No apt**: system package installation is skipped
+
+### Comparing configurations
+
+To compare two fuzzer configurations (e.g. different Echidna builds), run them sequentially. Each run produces a timestamped output directory with logs and corpus archives. Use the analysis pipeline with `--raw-labels` (see below) to plot them as separate series.
+
 ## Analyze Results
 
 Run the full pipeline in one pass:
@@ -133,6 +185,30 @@ rg -n "error:|Usage:|cannot parse value" "$DEST/analysis" -S
 aws ec2 get-console-output --instance-id i-0123456789abcdef0 --latest --output json \
   | jq -r '.Output' | tail -n 200
 ```
+
+### Raw Labels
+
+By default, the analysis pipeline normalizes fuzzer names: `echidna-baseline`, `echidna-bandit`, and `echidna-v2.3.1` all collapse to `echidna`. This is correct for cross-fuzzer benchmarks but wrong when comparing two configurations of the same fuzzer.
+
+Pass `RAW_LABELS=1` to preserve directory names as fuzzer labels:
+
+```bash
+make results-analyze-all RAW_LABELS=1 BUCKET=<bucket> RUN_ID=<id> DEST="$DEST"
+```
+
+This threads `--raw-labels` through the full pipeline (`results-analyze-filtered`, `report-events-to-cumulative`, `report-runner-metrics`). Reports and plots will show `echidna-baseline` and `echidna-bandit` as separate series instead of merging them under `echidna`.
+
+The flag works with both cloud-downloaded and local-mode logs. When using local mode, structure your prepared logs directory as:
+
+```
+logs/
+  echidna-baseline/
+    echidna.log
+  echidna-bandit/
+    echidna.log
+```
+
+Each subdirectory name becomes the fuzzer label in all CSVs and plots.
 
 ## CSV Report
 
