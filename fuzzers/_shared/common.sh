@@ -516,11 +516,11 @@ install_foundry() {
     log "Building Foundry at ${commit}"
     # shellcheck source=/dev/null
     source "${HOME}/.cargo/env"
-    cargo build --release --manifest-path "${tmp_dir}/foundry/Cargo.toml"
-    install -m 0755 "${tmp_dir}/foundry/target/release/forge" "${SCFUZZBENCH_BIN_DIR}/forge"
-    install -m 0755 "${tmp_dir}/foundry/target/release/cast" "${SCFUZZBENCH_BIN_DIR}/cast"
-    install -m 0755 "${tmp_dir}/foundry/target/release/anvil" "${SCFUZZBENCH_BIN_DIR}/anvil"
-    install -m 0755 "${tmp_dir}/foundry/target/release/chisel" "${SCFUZZBENCH_BIN_DIR}/chisel" || true
+    cargo build --profile maxperf --manifest-path "${tmp_dir}/foundry/Cargo.toml"
+    install -m 0755 "${tmp_dir}/foundry/target/maxperf/forge" "${SCFUZZBENCH_BIN_DIR}/forge"
+    install -m 0755 "${tmp_dir}/foundry/target/maxperf/cast" "${SCFUZZBENCH_BIN_DIR}/cast"
+    install -m 0755 "${tmp_dir}/foundry/target/maxperf/anvil" "${SCFUZZBENCH_BIN_DIR}/anvil"
+    install -m 0755 "${tmp_dir}/foundry/target/maxperf/chisel" "${SCFUZZBENCH_BIN_DIR}/chisel" || true
     echo "${commit}" > "${SCFUZZBENCH_ROOT}/foundry_commit"
     echo "${FOUNDRY_GIT_REPO}" > "${SCFUZZBENCH_ROOT}/foundry_repo"
     rm -rf "${tmp_dir}"
