@@ -106,9 +106,9 @@ continuous_run = true
 corpus_dir = "corpus/foundry"
 ```
 
-### 4) Foundry assertion mode (preferred)
+### 4) Foundry assertion mode
 
-Use Foundry assertion mode directly (no compatibility shim) when `fail_on_assert` support is available.
+Use Foundry assertion mode directly. Compatibility-shim modes are not supported.
 
 Required:
 1. keep all assertion reason strings in `Properties.sol` as `string constant ASSERTION_* = "!!! ...";`
@@ -127,10 +127,6 @@ Required:
    - Echidna/Medusa report handler name (`targetFunctionName(...)`)
    - Foundry failure traces include handler name (`targetFunctionName_ASSERTION_*`)
    - canonical dedup key is `targetFunctionName`
-
-Legacy fallback (only if pinning a Foundry without `fail_on_assert`):
-1. use the compatibility shim pattern from `foundry-rs/foundry#13322`
-2. keep wrapper invariants `invariant_assertion_failure_*` and assertion routing in `CryticToFoundry.sol`
 
 ### 5) Canary requirement for every target
 
@@ -293,7 +289,7 @@ Typical fields:
 4. Foundry failures not surfaced
    - verify `foundry.toml` sets `assertions_revert = false` and `[invariant].fail_on_assert = true`
    - verify assertion reasons are constants in `Properties.sol` (recommended `!!!` prefix)
-   - if using fail-on-assert mode, remove compatibility shim code (`_isAssertion`, `assertionFailures`, `invariant_assertion_failure_*`)
+   - remove leftover compatibility shim code (`_isAssertion`, `assertionFailures`, `invariant_assertion_failure_*`)
 5. Foundry unrealistically fast/all bugs immediate
    - remove any `test_*` functions in `CryticToFoundry`
 6. Echidna returns 0 issues unexpectedly
@@ -304,7 +300,6 @@ Typical fields:
    - ensure assertion handler is named `targetFunctionName_ASSERTION_<ASSERTION_CONSTANT_SUFFIX>`
    - ensure `ASSERTION_CONSTANT_SUFFIX` exactly matches the referenced `ASSERTION_*` constant suffix
    - ensure each handler references exactly one `ASSERTION_*` constant; split legacy multi-assert handlers when needed
-   - if using legacy shim mode, wrapper suffix must exactly match handler identifier
 
 ## Completion checklist
 

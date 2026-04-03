@@ -449,18 +449,6 @@ def extract_foundry_failure(payload: Dict[str, Any]) -> Tuple[Optional[str], Opt
     if ts_value is None:
         return None, None, None
 
-    invariant_name = normalize_foundry_failure_name(payload.get("invariant"))
-    payload_type = str(payload.get("type") or "").strip()
-    if invariant_name and payload_type == "invariant_failure":
-        return invariant_name, ts_value, "foundry-invariant-failure"
-
-    # Backward-compat fallback for older watcher lines emitted before
-    # `type: invariant_failure` was added in `fuzzers/foundry/run.sh`.
-    failed_value = parse_optional_float(payload.get("failed"))
-    if invariant_name and failed_value is not None and failed_value > 0:
-        return invariant_name, ts_value, "foundry-watcher-failure"
-
-    # Newer Foundry failure event schema.
     if str(payload.get("event") or "").strip() == "failure":
         target_name = normalize_foundry_failure_name(payload.get("target"))
         if target_name:
@@ -484,15 +472,15 @@ def parse_foundry_log(
                 except json.JSONDecodeError:
                     payload = None
                 if payload is not None:
+                    payload_ts = parse_optional_float(payload.get("timestamp"))
+                    if payload_ts is not None and first_ts is None:
+                        # Foundry emits epoch timestamps. Anchor elapsed time to the
+                        # first JSON event so failures are measured since the run
+                        # began, not since the first failure.
+                        first_ts = payload_ts
+
                     event_name, ts_value, source = extract_foundry_failure(payload)
                     if event_name and ts_value is not None and source:
-                        if first_ts is None:
-                            # Foundry emits epoch timestamps; use the first seen
-                            # timestamp as the baseline so elapsed_seconds measures
-                            # time since the run began, not time since the first
-                            # failure.
-                            first_ts = ts_value
-
                         if event_name not in seen:
                             seen.add(event_name)
                             events.append(
@@ -502,7 +490,7 @@ def parse_foundry_log(
                                     fuzzer=normalize_fuzzer(fuzzer_label),
                                     fuzzer_label=fuzzer_label,
                                     event=event_name,
-                                    elapsed_seconds=ts_value - first_ts,
+                                    elapsed_seconds=ts_value - (first_ts or ts_value),
                                     source=source,
                                     log_path=str(path),
                                 )

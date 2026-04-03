@@ -39,8 +39,8 @@ export TF_VAR_foundry_git_repo="https://github.com/0xalpharush/foundry"
 export TF_VAR_foundry_git_ref="fail_on_assert"
 ```
 
-For Foundry runs, prefer [0xalpharush/foundry](https://github.com/0xalpharush/foundry/tree/fail_on_assert) while this branch is being evaluated.
-Current analysis supports both legacy `invariant_failure` JSON and newer `event: failure` JSON events.
+For Foundry runs, use [0xalpharush/foundry](https://github.com/0xalpharush/foundry/tree/fail_on_assert).
+Current analysis expects the branch's `event: failure` JSON events.
 
 ## Re-run A Benchmark
 
