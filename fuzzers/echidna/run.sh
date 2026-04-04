@@ -6,6 +6,9 @@ source "${SCFUZZBENCH_COMMON_SH:-/opt/scfuzzbench/common.sh}"
 register_shutdown_trap
 
 prepare_workspace
+if [[ -z "${HOME:-}" ]]; then
+  export HOME=/root
+fi
 export PATH="${HOME}/.foundry/bin:${PATH}"
 
 require_env ECHIDNA_VERSION
