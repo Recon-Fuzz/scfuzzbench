@@ -79,7 +79,7 @@ variable "foundry_version" {
 variable "foundry_git_repo" {
   type        = string
   description = "Optional git repository to build Foundry from."
-  default     = "https://github.com/0xalpharush/foundry"
+  default     = "https://github.com/aviggiano/foundry"
 }
 
 variable "foundry_git_ref" {

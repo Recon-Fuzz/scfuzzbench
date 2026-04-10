@@ -95,7 +95,7 @@ const participatingFuzzerKeys = computed(() => {
 
 // Advanced / optional overrides.
 const foundryVersion = ref("");
-const foundryGitRepo = ref("https://github.com/0xalpharush/foundry");
+const foundryGitRepo = ref("https://github.com/aviggiano/foundry");
 const foundryGitRef = ref("fail_on_assert");
 
 const echidnaVersion = ref("");

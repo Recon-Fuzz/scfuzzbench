@@ -275,7 +275,7 @@ Typical fields:
 7. `fuzzers`: `["echidna","medusa","foundry"]`
 8. optional `fuzzer_env_json` only when target-specific override is necessary
 9. optional Foundry source fields:
-   - `foundry_git_repo`: `https://github.com/0xalpharush/foundry`
+   - `foundry_git_repo`: `https://github.com/aviggiano/foundry`
    - `foundry_git_ref`: `fail_on_assert`
 
 ## Common failures and fixes

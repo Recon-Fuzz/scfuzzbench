@@ -42,7 +42,7 @@ on:
       foundry_git_repo:
         description: "Optional Foundry git repo (build from source)."
         required: false
-        default: "https://github.com/0xalpharush/foundry"
+        default: "https://github.com/aviggiano/foundry"
       foundry_git_ref:
         description: "Optional Foundry git ref (branch/tag/commit)."
         required: false
@@ -120,7 +120,7 @@ on:
         description: "Optional Foundry git repo (build from source)."
         required: false
         type: string
-        default: "https://github.com/0xalpharush/foundry"
+        default: "https://github.com/aviggiano/foundry"
       foundry_git_ref:
         description: "Optional Foundry git ref (branch/tag/commit)."
         required: false
