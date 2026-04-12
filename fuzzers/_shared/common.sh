@@ -513,7 +513,8 @@ install_foundry() {
     git clone --depth 1 "${FOUNDRY_GIT_REPO}" "${tmp_dir}/foundry"
     if [[ -n "${FOUNDRY_GIT_REF:-}" ]]; then
       git -C "${tmp_dir}/foundry" fetch --depth 1 origin "${FOUNDRY_GIT_REF}"
-      git -C "${tmp_dir}/foundry" checkout "${FOUNDRY_GIT_REF}"
+      # `git fetch origin <ref>` updates FETCH_HEAD but does not always create a local branch.
+      git -C "${tmp_dir}/foundry" checkout --detach FETCH_HEAD
     fi
     local commit
     commit=$(git -C "${tmp_dir}/foundry" rev-parse --short HEAD)
