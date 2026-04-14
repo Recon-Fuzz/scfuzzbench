@@ -458,7 +458,15 @@ def parse_foundry_log(
                                 # failure.
                                 first_ts = ts_value
 
-                            if payload.get("type") == "invariant_failure" and invariant not in seen:
+                            payload_type = payload.get("type")
+                            is_invariant_failure = payload_type == "invariant_failure"
+                            failed_value = parse_optional_float(payload.get("failed"))
+                            is_legacy_failure = (
+                                payload_type is None
+                                and failed_value is not None
+                                and failed_value > 0.0
+                            )
+                            if (is_invariant_failure or is_legacy_failure) and invariant not in seen:
                                 seen.add(invariant)
                                 events.append(
                                     Event(
@@ -468,7 +476,11 @@ def parse_foundry_log(
                                         fuzzer_label=fuzzer_label,
                                         event=invariant,
                                         elapsed_seconds=ts_value - first_ts,
-                                        source="foundry-invariant-failure",
+                                        source=(
+                                            "foundry-invariant-failure"
+                                            if is_invariant_failure
+                                            else "foundry-legacy-failure"
+                                        ),
                                         log_path=str(path),
                                     )
                                 )

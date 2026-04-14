@@ -16,7 +16,7 @@ class FoundryParserTests(unittest.TestCase):
             tmp.close()
             raise
 
-    def test_parses_only_invariant_failure_records(self):
+    def test_parses_invariant_failure_and_legacy_failed_records(self):
         log_path = self.write_log(
             [
                 '{"type":"invariant_metrics","timestamp":100,"invariant":"invariant_a","failed_current":0,"failed_total":0,"metrics":{"cumulative_edges_seen":1}}',
@@ -29,15 +29,23 @@ class FoundryParserTests(unittest.TestCase):
         )
 
         events = analyze.parse_foundry_log(log_path, "run-1", "i-1", "foundry-git-test")
-        self.assertEqual([event.event for event in events], ["invariant_a", "invariant_b"])
+        self.assertEqual(
+            [event.event for event in events],
+            ["invariant_a", "invariant_b", "legacy_invariant"],
+        )
         self.assertEqual(
             [event.source for event in events],
-            ["foundry-invariant-failure", "foundry-invariant-failure"],
+            [
+                "foundry-invariant-failure",
+                "foundry-invariant-failure",
+                "foundry-legacy-failure",
+            ],
         )
         self.assertAlmostEqual(events[0].elapsed_seconds, 1.0)
         self.assertAlmostEqual(events[1].elapsed_seconds, 3.0)
+        self.assertAlmostEqual(events[2].elapsed_seconds, 4.0)
 
-    def test_ignores_legacy_foundry_records_without_type(self):
+    def test_parses_legacy_foundry_failed_records_without_type(self):
         log_path = self.write_log(
             [
                 '{"timestamp":100,"invariant":"legacy_invariant","failed":1,"metrics":{"cumulative_edges_seen":1}}',
@@ -46,7 +54,10 @@ class FoundryParserTests(unittest.TestCase):
         )
 
         events = analyze.parse_foundry_log(log_path, "run-1", "i-1", "foundry-git-test")
-        self.assertEqual(events, [])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event, "legacy_invariant")
+        self.assertEqual(events[0].source, "foundry-legacy-failure")
+        self.assertAlmostEqual(events[0].elapsed_seconds, 0.0)
 
     def test_parses_throughput_from_json_cumulative_metrics(self):
         log_path = self.write_log(
