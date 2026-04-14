@@ -27,6 +27,7 @@ from analysis.plot_palette import (
     build_non_fuzzer_color_map,
     non_fuzzer_shades,
 )
+from analysis.events_to_cumulative import normalize_fuzzer, split_instance_label
 from analysis.trial_run import (
     MIN_BUDGET_HOURS,
     MIN_RUNS_PER_FUZZER,
@@ -115,7 +116,29 @@ def filter_budget(df: pd.DataFrame, budget_hours: Optional[float]) -> pd.DataFra
     return df[df["elapsed_seconds"] <= budget_seconds].reset_index(drop=True)
 
 
-def build_overlap(df: pd.DataFrame, *, total_events: int) -> OverlapResult:
+def list_fuzzers_from_logs(*, logs_dir: Path, raw_labels: bool) -> List[str]:
+    if not logs_dir.exists():
+        die(f"logs dir not found: {logs_dir}")
+    if not logs_dir.is_dir():
+        die(f"logs dir is not a directory: {logs_dir}")
+
+    fuzzers: set[str] = set()
+    for instance_dir in sorted([p for p in logs_dir.iterdir() if p.is_dir()]):
+        instance_id, fuzzer_label = split_instance_label(instance_dir.name)
+        if instance_id == "unknown":
+            continue
+        fuzzer = fuzzer_label if raw_labels else normalize_fuzzer(fuzzer_label)
+        if str(fuzzer).strip():
+            fuzzers.add(str(fuzzer).strip())
+    return sorted(fuzzers)
+
+
+def build_overlap(
+    df: pd.DataFrame,
+    *,
+    total_events: int,
+    expected_fuzzers: Optional[List[str]] = None,
+) -> OverlapResult:
     first_seen: Dict[str, Dict[str, float]] = defaultdict(dict)
     runs_hit: Dict[str, Dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     set_membership: Dict[str, set[str]] = defaultdict(set)
@@ -131,6 +154,10 @@ def build_overlap(df: pd.DataFrame, *, total_events: int) -> OverlapResult:
         if prev is None or elapsed < prev:
             first_seen[invariant][fuzzer] = elapsed
         runs_hit[invariant][fuzzer].add(run_key)
+
+    if expected_fuzzers:
+        for fuzzer in expected_fuzzers:
+            set_membership.setdefault(str(fuzzer), set())
 
     fuzzers = sorted(set_membership.keys())
     set_sizes = {fuzzer: len(set_membership[fuzzer]) for fuzzer in fuzzers}
@@ -254,15 +281,23 @@ def write_md_report(
         lines.append(f"| {fuzzer} | {result.set_sizes.get(fuzzer, 0)} |")
     lines.append("")
 
+    active_fuzzers = [fuzzer for fuzzer in result.fuzzers if result.set_sizes.get(fuzzer, 0) > 0]
     all_combo = tuple(result.fuzzers)
+    active_combo = tuple(active_fuzzers)
     shared_all = (
-        len(result.intersections.get(all_combo, []))
-        if len(result.fuzzers) > 1
+        len(result.intersections.get(active_combo, []))
+        if len(active_fuzzers) > 1
         else len(next(iter(result.intersections.values())))
     )
     lines.append("## High-level overlap")
     lines.append("")
-    lines.append(f"- Shared by all fuzzers: **{shared_all}**")
+    lines.append(f"- Shared by all active fuzzers: **{shared_all}**")
+    if len(active_fuzzers) != len(result.fuzzers):
+        missing_fuzzers = [fuzzer for fuzzer in result.fuzzers if fuzzer not in active_fuzzers]
+        lines.append(
+            "- Fuzzers with no broken-invariant events: "
+            + f"`{', '.join(missing_fuzzers)}`"
+        )
     for fuzzer in result.fuzzers:
         count = len(result.intersections.get((fuzzer,), []))
         lines.append(f"- Exclusive to `{fuzzer}`: **{count}**")
@@ -280,11 +315,11 @@ def write_md_report(
         lines.append("</details>")
         lines.append("")
 
-    if len(result.fuzzers) > 1:
-        invariants = result.intersections.get(all_combo, [])
+    if len(active_fuzzers) > 1:
+        invariants = result.intersections.get(active_combo, [])
         lines.append("<details>")
         lines.append(
-            f"<summary>Shared by all fuzzers ({len(invariants)})</summary>"
+            f"<summary>Shared by all active fuzzers ({len(invariants)})</summary>"
         )
         lines.append("")
         render_invariant_list(lines, invariants, max_items=max_items_per_group)
@@ -293,7 +328,9 @@ def write_md_report(
 
     subset_entries: List[Tuple[Tuple[str, ...], List[str]]] = []
     for combo, invariants in result.intersections.items():
-        if len(combo) <= 1 or len(combo) == len(result.fuzzers):
+        if len(combo) <= 1:
+            continue
+        if len(active_fuzzers) > 1 and combo == active_combo:
             continue
         subset_entries.append((combo, invariants))
 
@@ -747,11 +784,25 @@ def parse_args() -> argparse.Namespace:
         description="Build broken-invariant overlap artifacts (CSV + Markdown + UpSet chart)."
     )
     parser.add_argument("--events-csv", type=Path, required=True)
+    parser.add_argument(
+        "--logs-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional prepared logs dir. If provided, include fuzzers that ran but "
+            "produced zero broken-invariant events."
+        ),
+    )
     parser.add_argument("--out-md", type=Path, required=True)
     parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--out-png", type=Path, required=True)
     parser.add_argument("--budget-hours", type=float, default=None)
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument(
+        "--raw-labels",
+        action="store_true",
+        help="Use raw directory names as fuzzer labels instead of normalizing.",
+    )
     return parser.parse_args()
 
 
@@ -763,6 +814,11 @@ def main() -> int:
     events = load_events(args.events_csv)
     total_events = len(events)
     filtered = filter_budget(events, args.budget_hours)
+    expected_fuzzers = (
+        list_fuzzers_from_logs(logs_dir=args.logs_dir, raw_labels=args.raw_labels)
+        if args.logs_dir is not None
+        else None
+    )
 
     runs_per_fuzzer: List[int] = []
     if not filtered.empty:
@@ -772,7 +828,11 @@ def main() -> int:
             ).nunique()
             runs_per_fuzzer.append(int(run_keys))
 
-    result = build_overlap(filtered, total_events=total_events)
+    result = build_overlap(
+        filtered,
+        total_events=total_events,
+        expected_fuzzers=expected_fuzzers,
+    )
     write_csv_report(result, args.out_csv)
     write_md_report(
         result,
