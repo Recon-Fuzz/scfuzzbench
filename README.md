@@ -2,6 +2,9 @@
 
 Benchmark suite for smart-contract fuzzers.
 
+🚀 **Support us on TheDAO Security Fund! https://giveth.io/project/scfuzzbench:-smart-contract-fuzzer-benchmark-suite**
+
+
 <table>
   <tr>
     <td><img src="docs/public/images/sample-run/bugs_over_time.png" alt="Bugs over time" width="420"></td>
