@@ -156,7 +156,7 @@ report-events-to-cumulative: analysis-venv
 	$(ANALYSIS_PY) analysis/events_to_cumulative.py --events-csv $(EVENTS_CSV) --out-csv $(CUMULATIVE_CSV) --logs-dir $(ANALYSIS_LOGS_DIR) $(RUN_ID_ARG) $(EXCLUDE_ARG) $(RAW_LABELS_ARG)
 
 report-invariant-overlap: analysis-venv
-	$(ANALYSIS_PY) analysis/invariant_overlap_report.py --events-csv $(EVENTS_CSV) --out-md $(BROKEN_INVARIANTS_MD) --out-csv $(BROKEN_INVARIANTS_CSV) --out-png $(INVARIANT_OVERLAP_PNG) $(INVARIANT_BUDGET_ARG) --top-k $(INVARIANT_TOP_K)
+	$(ANALYSIS_PY) analysis/invariant_overlap_report.py --events-csv $(EVENTS_CSV) --logs-dir $(ANALYSIS_LOGS_DIR) --out-md $(BROKEN_INVARIANTS_MD) --out-csv $(BROKEN_INVARIANTS_CSV) --out-png $(INVARIANT_OVERLAP_PNG) $(INVARIANT_BUDGET_ARG) --top-k $(INVARIANT_TOP_K) $(RAW_LABELS_ARG)
 
 report-runner-metrics: analysis-venv
 	$(ANALYSIS_PY) analysis/runner_metrics_report.py --logs-dir $(ANALYSIS_LOGS_DIR) --out-summary-csv $(RUNNER_RESOURCE_SUMMARY_CSV) --out-timeseries-csv $(RUNNER_RESOURCE_TIMESERIES_CSV) --out-md $(RUNNER_RESOURCE_MD) --out-cpu-png $(CPU_USAGE_PNG) --out-memory-png $(MEMORY_USAGE_PNG) --bin-seconds $(RUNNER_METRICS_BIN_SECONDS) $(RUN_ID_ARG) $(RUNNER_BUDGET_ARG) $(RAW_LABELS_ARG)

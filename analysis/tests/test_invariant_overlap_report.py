@@ -138,6 +138,50 @@ class InvariantOverlapReportTests(unittest.TestCase):
                 ["iHub_mintFeeShares"],
             )
 
+    def test_report_includes_expected_fuzzers_with_zero_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "events.csv"
+            out_md = Path(tmp) / "broken_invariants.md"
+            csv_path.write_text(
+                "\n".join(
+                    [
+                        "run_id,instance_id,fuzzer,event,elapsed_seconds",
+                        "1,i-a,echidna,invariant_alpha(),10",
+                        "1,i-b,medusa,CryticTester.invariant_alpha(),12",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            events = overlap.load_events(csv_path)
+            result = overlap.build_overlap(
+                events,
+                total_events=len(events),
+                expected_fuzzers=["echidna", "foundry", "medusa"],
+            )
+            overlap.write_md_report(result, out_md, budget_hours=1.0, top_k=20)
+            report = out_md.read_text(encoding="utf-8")
+
+            self.assertEqual(result.set_sizes["foundry"], 0)
+            self.assertIn("| foundry | 0 |", report)
+            self.assertIn("Shared by all active fuzzers: **1**", report)
+            self.assertIn(
+                "Fuzzers with no broken-invariant events: `foundry`",
+                report,
+            )
+            self.assertIn("Shared by all active fuzzers (1)", report)
+
+    def test_list_fuzzers_from_logs_ignores_non_instance_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp)
+            (logs_dir / "data").mkdir()
+            (logs_dir / "i-aaa-foundry-git-test").mkdir()
+            (logs_dir / "i-bbb-echidna-v2").mkdir()
+
+            fuzzers = overlap.list_fuzzers_from_logs(logs_dir=logs_dir, raw_labels=False)
+            self.assertEqual(fuzzers, ["echidna", "foundry"])
+
     def test_detail_lines_without_limit_do_not_truncate(self):
         lines = overlap._detail_lines(
             entries=[("[foundry+medusa] foundry + medusa (2)", ["inv_a", "inv_b", "inv_c"])],
