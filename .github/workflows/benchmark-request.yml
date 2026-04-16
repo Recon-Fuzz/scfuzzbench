@@ -30,7 +30,7 @@ jobs:
       foundry_git_ref: ${{ steps.prepare.outputs.foundry_git_ref }}
       echidna_version: ${{ steps.prepare.outputs.echidna_version }}
       medusa_version: ${{ steps.prepare.outputs.medusa_version }}
-      bitwuzla_version: ${{ steps.prepare.outputs.bitwuzla_version }}
+      recon_version: ${{ steps.prepare.outputs.recon_version }}
       git_token_ssm_parameter_name: ${{ steps.prepare.outputs.git_token_ssm_parameter_name }}
       properties_path: ${{ steps.prepare.outputs.properties_path }}
       fuzzer_env_json: ${{ steps.prepare.outputs.fuzzer_env_json }}
@@ -51,7 +51,7 @@ jobs:
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
             const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
-            const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry"];
+            const DEFAULT_FUZZERS = ["echidna", "medusa", "foundry", "recon-fuzzer"];
 
             function uniq(arr) {
               return Array.from(new Set(arr));
@@ -329,8 +329,8 @@ jobs:
             if (!echidna_version.ok) errors.push(echidna_version.message);
             const medusa_version = mustString(payload, "medusa_version", { required: false, maxLen: 32 });
             if (!medusa_version.ok) errors.push(medusa_version.message);
-            const bitwuzla_version = mustString(payload, "bitwuzla_version", { required: false, maxLen: 32 });
-            if (!bitwuzla_version.ok) errors.push(bitwuzla_version.message);
+            const recon_version = mustString(payload, "recon_version", { required: false, maxLen: 32 });
+            if (!recon_version.ok) errors.push(recon_version.message);
 
             const git_token_ssm_parameter_name = mustString(payload, "git_token_ssm_parameter_name", { required: false, maxLen: 200 });
             if (!git_token_ssm_parameter_name.ok) errors.push(git_token_ssm_parameter_name.message);
@@ -445,7 +445,7 @@ jobs:
               core.setOutput("foundry_git_ref", foundry_git_ref.ok ? foundry_git_ref.value : "");
               core.setOutput("echidna_version", echidna_version.ok ? echidna_version.value : "");
               core.setOutput("medusa_version", medusa_version.ok ? medusa_version.value : "");
-              core.setOutput("bitwuzla_version", bitwuzla_version.ok ? bitwuzla_version.value : "");
+              core.setOutput("recon_version", recon_version.ok ? recon_version.value : "");
               core.setOutput("git_token_ssm_parameter_name", git_token_ssm_parameter_name.ok ? git_token_ssm_parameter_name.value : "");
               core.setOutput("properties_path", properties_path.ok ? properties_path.value : "");
               core.setOutput("fuzzer_env_json", fuzzer_env_json.ok ? fuzzer_env_json.value : "");
@@ -469,7 +469,7 @@ jobs:
       foundry_git_ref: ${{ needs.prepare.outputs.foundry_git_ref }}
       echidna_version: ${{ needs.prepare.outputs.echidna_version }}
       medusa_version: ${{ needs.prepare.outputs.medusa_version }}
-      bitwuzla_version: ${{ needs.prepare.outputs.bitwuzla_version }}
+      recon_version: ${{ needs.prepare.outputs.recon_version }}
       git_token_ssm_parameter_name: ${{ needs.prepare.outputs.git_token_ssm_parameter_name }}
       properties_path: ${{ needs.prepare.outputs.properties_path }}
       fuzzer_env_json: ${{ needs.prepare.outputs.fuzzer_env_json }}

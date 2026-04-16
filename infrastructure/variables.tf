@@ -100,10 +100,10 @@ variable "medusa_version" {
   default     = "1.4.1"
 }
 
-variable "bitwuzla_version" {
+variable "recon_version" {
   type        = string
-  description = "Pinned Bitwuzla version for symexec fallback install."
-  default     = "0.8.2"
+  description = "Pinned Recon fuzzer version."
+  default     = "0.4.6"
 }
 
 variable "git_token_ssm_parameter_name" {

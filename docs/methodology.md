@@ -19,7 +19,7 @@ Core inputs are defined through Terraform vars and/or workflow dispatch:
 - Mode: `benchmark_type` (`property` or `optimization`)
 - Infra: `instance_type`, `instances_per_fuzzer`, `timeout_hours`
 - Fuzzer set: `fuzzers` (or default all available)
-- Tool versions: `foundry_version`, `echidna_version`, `medusa_version`, plus optional `bitwuzla_version`
+- Tool versions: `foundry_version`, `echidna_version`, `medusa_version`, `recon_version`
 
 In CI (`.github/workflows/benchmark-run.yml`), inputs are validated before apply (value ranges, formats, and conservative character constraints).
 
@@ -131,7 +131,7 @@ Optional controls include `EXCLUDE_FUZZERS`, `REPORT_BUDGET`, `REPORT_GRID_STEP_
 - Parser is fuzzer-aware:
   - Foundry: parse JSON lines, count events only from records with `event=failure`, and use the first JSON `timestamp` as the elapsed-time baseline.
   - Medusa: parse elapsed markers and failed assertions/properties from textual logs.
-  - Echidna variants: parse falsification markers from textual logs.
+  - Echidna and Recon Fuzzer: parse falsification markers from textual logs.
   - Unknown fuzzers: fall back to generic pattern parsing.
 - Event de-duplication is per run-instance stream (same event name counted once per run).
 - Outputs:

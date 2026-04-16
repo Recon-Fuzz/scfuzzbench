@@ -9,28 +9,24 @@ locals {
   # when AWS auto-selects an AZ where the type isn't offered.
   subnet_availability_zone = var.availability_zone != "" ? var.availability_zone : sort(data.aws_ec2_instance_type_offerings.fuzzer.locations)[0]
 
-  benchmark_manifest = merge(
-    {
-      scfuzzbench_commit   = var.scfuzzbench_commit
-      target_repo_url      = var.target_repo_url
-      target_commit        = var.target_commit
-      benchmark_type       = var.benchmark_type
-      instance_type        = var.instance_type
-      instances_per_fuzzer = var.instances_per_fuzzer
-      timeout_hours        = var.timeout_hours
-      aws_region           = var.aws_region
-      ubuntu_ami_id        = data.aws_ssm_parameter.ubuntu_ami.value
-      foundry_version      = var.foundry_version
-      foundry_git_repo     = var.foundry_git_repo
-      foundry_git_ref      = var.foundry_git_ref
-      echidna_version      = var.echidna_version
-      medusa_version       = var.medusa_version
-      fuzzer_keys          = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
-    },
-    contains(local.selected_fuzzer_keys, "echidna-symexec") ? {
-      bitwuzla_version = var.bitwuzla_version
-    } : {}
-  )
+  benchmark_manifest = {
+    scfuzzbench_commit   = var.scfuzzbench_commit
+    target_repo_url      = var.target_repo_url
+    target_commit        = var.target_commit
+    benchmark_type       = var.benchmark_type
+    instance_type        = var.instance_type
+    instances_per_fuzzer = var.instances_per_fuzzer
+    timeout_hours        = var.timeout_hours
+    aws_region           = var.aws_region
+    ubuntu_ami_id        = data.aws_ssm_parameter.ubuntu_ami.value
+    foundry_version      = var.foundry_version
+    foundry_git_repo     = var.foundry_git_repo
+    foundry_git_ref      = var.foundry_git_ref
+    echidna_version      = var.echidna_version
+    medusa_version       = var.medusa_version
+    recon_version        = var.recon_version
+    fuzzer_keys          = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
+  }
 
   benchmark_manifest_json = jsonencode(local.benchmark_manifest)
   benchmark_manifest_b64  = base64encode(local.benchmark_manifest_json)
@@ -61,9 +57,9 @@ locals {
       run_path     = "${path.module}/../fuzzers/foundry/run.sh"
     },
     {
-      key          = "echidna-symexec"
-      install_path = "${path.module}/../fuzzers/echidna-symexec/install.sh"
-      run_path     = "${path.module}/../fuzzers/echidna-symexec/run.sh"
+      key          = "recon-fuzzer"
+      install_path = "${path.module}/../fuzzers/recon-fuzzer/install.sh"
+      run_path     = "${path.module}/../fuzzers/recon-fuzzer/run.sh"
     },
   ]
   available_fuzzer_keys = [
@@ -367,7 +363,7 @@ resource "aws_instance" "fuzzer" {
     foundry_git_ref              = var.foundry_git_ref
     echidna_version              = var.echidna_version
     medusa_version               = var.medusa_version
-    bitwuzla_version             = var.bitwuzla_version
+    recon_version                = var.recon_version
     git_token_ssm_parameter_name = var.git_token_ssm_parameter_name
     fuzzer_env                   = local.merged_fuzzer_env
   }))

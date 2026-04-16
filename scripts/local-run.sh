@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEFAULT_ECHIDNA_VERSION="2.3.1"
 DEFAULT_MEDUSA_VERSION="1.4.1"
 DEFAULT_FOUNDRY_VERSION="v1.6.0-rc1"
-DEFAULT_BITWUZLA_VERSION="0.8.2"
+DEFAULT_RECON_VERSION="0.4.6"
 DEFAULT_BENCHMARK_TYPE="property"
 DEFAULT_TIMEOUT="86400"   # 24 h – same as cloud default
 DEFAULT_WORKERS=""         # empty = let common.sh pick nproc-based default
@@ -23,7 +23,7 @@ Usage: $(basename "$0") [OPTIONS]
 Run a fuzzer locally against a target repository.
 
 Required:
-  -f, --fuzzer FUZZER           Fuzzer to run: echidna | medusa | foundry | echidna-symexec
+  -f, --fuzzer FUZZER           Fuzzer to run: echidna | medusa | foundry | recon-fuzzer
   -r, --repo   URL              Target git repository URL
   -b, --branch BRANCH           Branch or commit to check out
 
@@ -33,7 +33,7 @@ Optional – general:
   -T, --type    TYPE            Benchmark type: property | optimization (default: ${DEFAULT_BENCHMARK_TYPE})
       --install                 Run the fuzzer's install.sh first (idempotent)
 
-Optional – echidna / echidna-symexec:
+Optional – echidna / recon-fuzzer:
       --echidna-config  PATH    Echidna YAML config (relative to target repo)
       --echidna-target  PATH    Solidity target file    (e.g. test/recon/CryticTester.sol)
       --echidna-contract NAME   Target contract name    (e.g. CryticTester)
@@ -53,10 +53,10 @@ Optional – versions (override defaults):
       --echidna-version  VER    (default: ${DEFAULT_ECHIDNA_VERSION})
       --medusa-version   VER    (default: ${DEFAULT_MEDUSA_VERSION})
       --foundry-version  VER    (default: ${DEFAULT_FOUNDRY_VERSION})
-      --bitwuzla-version VER    (default: ${DEFAULT_BITWUZLA_VERSION})
+      --recon-version    VER    (default: ${DEFAULT_RECON_VERSION})
 
 Environment variables:
-  Any SCFUZZBENCH_*, ECHIDNA_*, MEDUSA_*, FOUNDRY_* env vars set before
+  Any SCFUZZBENCH_*, ECHIDNA_*, MEDUSA_*, FOUNDRY_*, RECON_* env vars set before
   invocation are passed through and take precedence over CLI flags.
 
 Examples:
@@ -91,7 +91,7 @@ DO_INSTALL=0
 ECHIDNA_VERSION_ARG=""
 MEDUSA_VERSION_ARG=""
 FOUNDRY_VERSION_ARG=""
-BITWUZLA_VERSION_ARG=""
+RECON_VERSION_ARG=""
 
 ECHIDNA_CONFIG_ARG=""
 ECHIDNA_TARGET_ARG=""
@@ -132,7 +132,7 @@ while [[ $# -gt 0 ]]; do
     --echidna-version)      ECHIDNA_VERSION_ARG="$2"; shift 2 ;;
     --medusa-version)       MEDUSA_VERSION_ARG="$2"; shift 2 ;;
     --foundry-version)      FOUNDRY_VERSION_ARG="$2"; shift 2 ;;
-    --bitwuzla-version)     BITWUZLA_VERSION_ARG="$2"; shift 2 ;;
+    --recon-version)        RECON_VERSION_ARG="$2"; shift 2 ;;
     -h|--help)              usage 0 ;;
     *)
       echo "Unknown option: $1" >&2
@@ -155,8 +155,8 @@ if [[ -z "${BRANCH}" ]]; then
 fi
 
 case "${FUZZER}" in
-  echidna|medusa|foundry|echidna-symexec) ;;
-  *) echo "Error: unknown fuzzer '${FUZZER}'. Choose: echidna, medusa, foundry, echidna-symexec" >&2; exit 1 ;;
+  echidna|medusa|foundry|recon-fuzzer) ;;
+  *) echo "Error: unknown fuzzer '${FUZZER}'. Choose: echidna, medusa, foundry, recon-fuzzer" >&2; exit 1 ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -178,14 +178,15 @@ export SCFUZZBENCH_TIMEOUT_SECONDS="${TIMEOUT}"
 export ECHIDNA_VERSION="${ECHIDNA_VERSION_ARG:-${ECHIDNA_VERSION:-${DEFAULT_ECHIDNA_VERSION}}}"
 export MEDUSA_VERSION="${MEDUSA_VERSION_ARG:-${MEDUSA_VERSION:-${DEFAULT_MEDUSA_VERSION}}}"
 export FOUNDRY_VERSION="${FOUNDRY_VERSION_ARG:-${FOUNDRY_VERSION:-${DEFAULT_FOUNDRY_VERSION}}}"
-export BITWUZLA_VERSION="${BITWUZLA_VERSION_ARG:-${BITWUZLA_VERSION:-${DEFAULT_BITWUZLA_VERSION}}}"
+export RECON_VERSION="${RECON_VERSION_ARG:-${RECON_VERSION:-${DEFAULT_RECON_VERSION}}}"
 
 # Workers
 if [[ -n "${WORKERS}" ]]; then
   case "${FUZZER}" in
-    echidna|echidna-symexec) export ECHIDNA_WORKERS="${ECHIDNA_WORKERS:-${WORKERS}}" ;;
-    medusa)                  export MEDUSA_WORKERS="${MEDUSA_WORKERS:-${WORKERS}}" ;;
-    foundry)                 export FOUNDRY_THREADS="${FOUNDRY_THREADS:-${WORKERS}}" ;;
+    echidna)       export ECHIDNA_WORKERS="${ECHIDNA_WORKERS:-${WORKERS}}" ;;
+    medusa)        export MEDUSA_WORKERS="${MEDUSA_WORKERS:-${WORKERS}}" ;;
+    foundry)       export FOUNDRY_THREADS="${FOUNDRY_THREADS:-${WORKERS}}" ;;
+    recon-fuzzer)  export RECON_WORKERS="${RECON_WORKERS:-${WORKERS}}" ;;
   esac
 fi
 
@@ -197,7 +198,7 @@ set_if_nonempty() {
   fi
 }
 
-# Echidna / Echidna-symexec
+# Echidna / Recon Fuzzer
 set_if_nonempty ECHIDNA_CONFIG     "${ECHIDNA_CONFIG_ARG}"
 set_if_nonempty ECHIDNA_TARGET     "${ECHIDNA_TARGET_ARG}"
 set_if_nonempty ECHIDNA_CONTRACT   "${ECHIDNA_CONTRACT_ARG}"

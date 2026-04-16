@@ -34,7 +34,7 @@ on:
       fuzzers_json:
         description: "JSON list of fuzzer keys to run (optional)."
         required: false
-        default: '["echidna","medusa","foundry"]'
+        default: '["echidna","medusa","foundry","recon-fuzzer"]'
       foundry_version:
         description: "Override Foundry version (optional)."
         required: false
@@ -55,8 +55,8 @@ on:
         description: "Override Medusa version (optional)."
         required: false
         default: ""
-      bitwuzla_version:
-        description: "Override Bitwuzla version (optional)."
+      recon_version:
+        description: "Override Recon Fuzzer version (optional)."
         required: false
         default: ""
       git_token_ssm_parameter_name:
@@ -110,7 +110,7 @@ on:
         description: "JSON list of fuzzer keys to run (optional)."
         required: false
         type: string
-        default: '["echidna","medusa","foundry"]'
+        default: '["echidna","medusa","foundry","recon-fuzzer"]'
       foundry_version:
         description: "Override Foundry version (optional)."
         required: false
@@ -136,8 +136,8 @@ on:
         required: false
         type: string
         default: ""
-      bitwuzla_version:
-        description: "Override Bitwuzla version (optional)."
+      recon_version:
+        description: "Override Recon Fuzzer version (optional)."
         required: false
         type: string
         default: ""
@@ -274,7 +274,7 @@ jobs:
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           ECHIDNA_VERSION: ${{ inputs.echidna_version }}
           MEDUSA_VERSION: ${{ inputs.medusa_version }}
-          BITWUZLA_VERSION: ${{ inputs.bitwuzla_version }}
+          RECON_VERSION: ${{ inputs.recon_version }}
           GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           PROPERTIES_PATH: ${{ inputs.properties_path }}
           FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
@@ -340,8 +340,8 @@ jobs:
           if [[ -n "${MEDUSA_VERSION}" ]]; then
             require_safe "medusa_version" "${MEDUSA_VERSION}"
           fi
-          if [[ -n "${BITWUZLA_VERSION}" ]]; then
-            require_safe "bitwuzla_version" "${BITWUZLA_VERSION}"
+          if [[ -n "${RECON_VERSION}" ]]; then
+            require_safe "recon_version" "${RECON_VERSION}"
           fi
 
           if [[ ! "${TARGET_REPO_URL}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\.git)?/?$ ]]; then
@@ -382,7 +382,7 @@ jobs:
 
           raw = os.environ.get("FUZZERS_JSON", "").strip()
           if not raw:
-              raw = '["echidna","medusa","foundry"]'
+              raw = '["echidna","medusa","foundry","recon-fuzzer"]'
           try:
               obj = json.loads(raw)
           except Exception as e:
@@ -460,7 +460,7 @@ jobs:
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           ECHIDNA_VERSION: ${{ inputs.echidna_version }}
           MEDUSA_VERSION: ${{ inputs.medusa_version }}
-          BITWUZLA_VERSION: ${{ inputs.bitwuzla_version }}
+          RECON_VERSION: ${{ inputs.recon_version }}
           GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           FUZZER_ENV_JSON: ${{ inputs.fuzzer_env_json }}
           PROPERTIES_PATH: ${{ inputs.properties_path }}
@@ -469,7 +469,7 @@ jobs:
           run_id=$(date +%s)
           fuzzers="${FUZZERS_JSON:-}"
           if [[ -z "${fuzzers}" ]]; then
-            fuzzers='["echidna","medusa","foundry"]'
+            fuzzers='["echidna","medusa","foundry","recon-fuzzer"]'
           fi
           tf_args=(
             -var "aws_region=${AWS_REGION}"
@@ -500,8 +500,8 @@ jobs:
           if [[ -n "${MEDUSA_VERSION}" ]]; then
             tf_args+=(-var "medusa_version=${MEDUSA_VERSION}")
           fi
-          if [[ -n "${BITWUZLA_VERSION}" ]]; then
-            tf_args+=(-var "bitwuzla_version=${BITWUZLA_VERSION}")
+          if [[ -n "${RECON_VERSION}" ]]; then
+            tf_args+=(-var "recon_version=${RECON_VERSION}")
           fi
           if [[ -n "${GIT_TOKEN_SSM_PARAMETER_NAME}" ]]; then
             tf_args+=(-var "git_token_ssm_parameter_name=${GIT_TOKEN_SSM_PARAMETER_NAME}")

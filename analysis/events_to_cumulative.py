@@ -50,8 +50,8 @@ def split_instance_label(label: str) -> Tuple[str, str]:
 
 def normalize_fuzzer(fuzzer_label: str) -> str:
     lower = fuzzer_label.lower()
-    if "echidna" in lower and "symexec" in lower:
-        return "echidna-symexec"
+    if "recon" in lower:
+        return "recon-fuzzer"
     if lower.startswith("echidna"):
         return "echidna"
     if "medusa" in lower:
