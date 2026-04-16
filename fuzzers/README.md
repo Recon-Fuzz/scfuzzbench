@@ -27,15 +27,17 @@ Notes:
 - In `property` mode, the runner rewrites `prefix: "invariant_"` to `prefix: "echidna_"` inside the config file so global properties are treated like assertions.
 - By default, the runner appends `+RTS -A1g -RTS` to reduce GC overhead on multicore instances.
 
-## Echidna (symexec)
+## Recon Fuzzer
 
 Environment variables:
-- `ECHIDNA_VERSION`, `BITWUZLA_VERSION` (required)
-- Same `ECHIDNA_*` knobs as above
-- `ECHIDNA_SYMEXEC_CORPUS_DIR` (optional; defaults to `corpus/echidna-symexec`)
+- `RECON_VERSION` (required)
+- `ECHIDNA_CONFIG` or `ECHIDNA_TARGET` (required; add `ECHIDNA_CONTRACT` if needed)
+- `RECON_WORKERS`, `RECON_TEST_MODE`, `RECON_EXTRA_ARGS`, `RECON_CORPUS_DIR`
+- Fallback compatibility knobs: `ECHIDNA_WORKERS`, `ECHIDNA_TEST_MODE`, `ECHIDNA_EXTRA_ARGS`, `ECHIDNA_CORPUS_DIR`
 
 Notes:
-- Runs with `echidna-test --sym-exec true`.
+- Runs with `recon fuzz . --format text`.
+- In `property` mode, rewrites `prefix: "invariant_"` to `prefix: "echidna_"` in config for global property compatibility.
 
 ## Medusa
 

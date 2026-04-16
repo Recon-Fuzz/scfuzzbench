@@ -36,6 +36,7 @@ A fuzzer is currently considered in-scope when it is:
 - Foundry
 - Echidna
 - Medusa
+- Recon Fuzzer
 
 ## Benchmark Targets
 

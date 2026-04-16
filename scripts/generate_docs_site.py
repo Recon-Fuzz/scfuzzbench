@@ -404,15 +404,6 @@ def format_fuzzer_lines(manifest: dict) -> list[str]:
     lines: list[str] = []
     for fuzzer in ordered_fuzzers:
         version = versions.get(fuzzer, "").strip()
-        if not version and fuzzer == "echidna-symexec":
-            echidna_version = versions.get("echidna", "").strip()
-            bitwuzla_version = versions.get("bitwuzla", "").strip()
-            if echidna_version and bitwuzla_version:
-                version = f"{echidna_version}, bitwuzla {bitwuzla_version}"
-            elif echidna_version:
-                version = echidna_version
-            elif bitwuzla_version:
-                version = f"bitwuzla {bitwuzla_version}"
         line = f"{fuzzer} ({version})" if version else fuzzer
         lines.append(f"`{line}`")
     return lines
@@ -808,7 +799,7 @@ def main() -> int:
             keys = ", ".join([str(x) for x in m.get("fuzzer_keys", [])])
             lines.append(f"- fuzzers: `{keys}`")
         versions: list[str] = []
-        for k in ["foundry_version", "echidna_version", "medusa_version", "bitwuzla_version"]:
+        for k in ["foundry_version", "echidna_version", "medusa_version", "recon_version"]:
             v = str(m.get(k, "")).strip()
             if v:
                 versions.append(f"{k.removesuffix('_version')}@{v}")
@@ -1050,7 +1041,7 @@ def main() -> int:
         add_kv("foundry_git_ref", m.get("foundry_git_ref"))
         add_kv("echidna_version", m.get("echidna_version"))
         add_kv("medusa_version", m.get("medusa_version"))
-        add_kv("bitwuzla_version", m.get("bitwuzla_version"))
+        add_kv("recon_version", m.get("recon_version"))
         if isinstance(m.get("fuzzer_keys"), list):
             lines.append(f"- fuzzer_keys: `{', '.join([str(x) for x in m.get('fuzzer_keys', [])])}`")
         lines.append("")

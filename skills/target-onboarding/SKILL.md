@@ -272,7 +272,7 @@ Typical fields:
 4. `instance_type`
 5. `instances_per_fuzzer`
 6. `timeout_hours`
-7. `fuzzers`: `["echidna","medusa","foundry"]`
+7. `fuzzers`: `["echidna","medusa","foundry","recon-fuzzer"]`
 8. optional `fuzzer_env_json` only when target-specific override is necessary
 9. optional Foundry source fields:
    - `foundry_git_repo`: `https://github.com/aviggiano/foundry`

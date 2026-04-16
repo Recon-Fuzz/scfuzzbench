@@ -10,7 +10,7 @@ Set inputs via `-var`/`tfvars` (`TF_VAR_*` also works):
 - `benchmark_type` (`property` or `optimization`)
 - `instance_type`, `instances_per_fuzzer`, `timeout_hours`
 - `fuzzers` (allowlist; empty means all available)
-- fuzzer versions (`foundry_version`, `echidna_version`, `medusa_version`, optional `bitwuzla_version`)
+- fuzzer versions (`foundry_version`, `echidna_version`, `medusa_version`, `recon_version`)
 - `git_token_ssm_parameter_name` (for private repos)
 - `fuzzer_env` values such as `SCFUZZBENCH_PROPERTIES_PATH`
 
@@ -33,7 +33,7 @@ export TF_VAR_target_repo_url="https://github.com/org/repo"
 export TF_VAR_target_commit="..."
 export TF_VAR_timeout_hours=1
 export TF_VAR_instances_per_fuzzer=4
-export TF_VAR_fuzzers='["echidna","medusa","foundry"]'
+export TF_VAR_fuzzers='["echidna","medusa","foundry","recon-fuzzer"]'
 export TF_VAR_git_token_ssm_parameter_name="/scfuzzbench/recon/github_token"
 export TF_VAR_foundry_git_repo="https://github.com/aviggiano/foundry"
 export TF_VAR_foundry_git_ref="fail_on_assert"
@@ -123,7 +123,7 @@ scripts/local-run.sh \
 ```
 
 Required flags:
-- `-f, --fuzzer`: `echidna`, `medusa`, `foundry`, or `echidna-symexec`
+- `-f, --fuzzer`: `echidna`, `medusa`, `foundry`, or `recon-fuzzer`
 - `-r, --repo`: target git repository URL
 - `-b, --branch`: branch or commit to check out
 

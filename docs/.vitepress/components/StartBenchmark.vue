@@ -67,7 +67,7 @@ const discoveredFuzzerRuns = import.meta.glob("../../../fuzzers/*/run.sh", {
 
 function orderFuzzers(keys: string[]): string[] {
   const unique = Array.from(new Set(keys));
-  const preferred = ["echidna", "medusa", "foundry", "echidna-symexec"];
+  const preferred = ["echidna", "medusa", "foundry", "recon-fuzzer"];
   const orderedPreferred = preferred.filter((name) => unique.includes(name));
   const extras = unique.filter((name) => !preferred.includes(name)).sort();
   return [...orderedPreferred, ...extras];
@@ -85,9 +85,7 @@ const allFuzzerKeys = orderFuzzers(
 );
 
 const selectableFuzzerKeys = allFuzzerKeys;
-const selectedFuzzerKeys = ref<string[]>(
-  allFuzzerKeys.filter((name) => name !== "echidna-symexec")
-);
+const selectedFuzzerKeys = ref<string[]>([...allFuzzerKeys]);
 const participatingFuzzerKeys = computed(() => {
   const selected = new Set(selectedFuzzerKeys.value);
   return allFuzzerKeys.filter((name) => selected.has(name));
@@ -100,7 +98,7 @@ const foundryGitRef = ref("fail_on_assert");
 
 const echidnaVersion = ref("");
 const medusaVersion = ref("");
-const bitwuzlaVersion = ref("");
+const reconVersion = ref("");
 
 const gitTokenSsmParameterName = ref("/scfuzzbench/recon/github_token");
 
@@ -247,7 +245,7 @@ const requestJson = computed(() => {
 
     echidna_version: echidnaVersion.value.trim(),
     medusa_version: medusaVersion.value.trim(),
-    bitwuzla_version: bitwuzlaVersion.value.trim(),
+    recon_version: reconVersion.value.trim(),
 
     git_token_ssm_parameter_name: gitTokenSsmParameterName.value.trim(),
 
@@ -424,8 +422,8 @@ const showAdvanced = ref(false);
           </label>
 
           <label class="sb-start__field">
-            <div class="sb-start__label">Bitwuzla version override (optional)</div>
-            <input v-model="bitwuzlaVersion" class="sb-start__input" type="text" placeholder="e.g. 0.8.2" />
+            <div class="sb-start__label">Recon Fuzzer version override (optional)</div>
+            <input v-model="reconVersion" class="sb-start__input" type="text" placeholder="e.g. 0.4.6" />
           </label>
 
           <label class="sb-start__field">

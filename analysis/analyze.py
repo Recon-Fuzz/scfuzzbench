@@ -218,8 +218,8 @@ def split_instance_label(label: str) -> Tuple[str, str]:
 
 def normalize_fuzzer(fuzzer_label: str) -> str:
     lower = fuzzer_label.lower()
-    if "echidna" in lower and "symexec" in lower:
-        return "echidna-symexec"
+    if "recon" in lower:
+        return "recon-fuzzer"
     if lower.startswith("echidna"):
         return "echidna"
     if "medusa" in lower:
@@ -793,7 +793,7 @@ def parse_logs(logs_dir: Path, run_id: Optional[str]) -> List[Event]:
             events.extend(parse_foundry_log(path, run_id_value, instance_id, fuzzer_label))
         elif fuzzer == "medusa":
             events.extend(parse_medusa_log(path, run_id_value, instance_id, fuzzer_label))
-        elif fuzzer in ("echidna", "echidna-symexec"):
+        elif fuzzer == "echidna":
             events.extend(
                 parse_generic_log(
                     path,
@@ -803,6 +803,18 @@ def parse_logs(logs_dir: Path, run_id: Optional[str]) -> List[Event]:
                     allow_bang=False,
                     allow_falsified=True,
                     allow_failed=False,
+                )
+            )
+        elif fuzzer == "recon-fuzzer":
+            events.extend(
+                parse_generic_log(
+                    path,
+                    run_id_value,
+                    instance_id,
+                    fuzzer_label,
+                    allow_bang=False,
+                    allow_falsified=True,
+                    allow_failed=True,
                 )
             )
         else:
