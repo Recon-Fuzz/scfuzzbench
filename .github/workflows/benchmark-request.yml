@@ -351,14 +351,31 @@ jobs:
 
             const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const authorAssociation = String(issue.author_association || "");
-            if (!allowedAssociations.has(authorAssociation)) {
+            const authorLogin = String((issue.user && issue.user.login) || "");
+            let authorAllowed = allowedAssociations.has(authorAssociation);
+            if (!authorAllowed && authorLogin) {
+              // Org members with *private* membership show up as CONTRIBUTOR in the
+              // webhook payload, so also accept authors whose effective repository
+              // permission grants push access.
+              try {
+                const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username: authorLogin,
+                });
+                authorAllowed = perm.permission === "admin" || perm.permission === "write";
+              } catch (e) {
+                if (e.status !== 403 && e.status !== 404) throw e;
+              }
+            }
+            if (!authorAllowed) {
               await upsertBotComment(
                 [
                   "## Benchmark request rejected",
                   "",
                   `Issue author association \`${authorAssociation}\` is not allowed to request benchmarks.`,
                   "",
-                  "Allowed: `OWNER`, `MEMBER`, `COLLABORATOR`.",
+                  "Allowed: `OWNER`, `MEMBER`, `COLLABORATOR`, or anyone with write access to this repository.",
                 ].join("\n")
               );
               await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
