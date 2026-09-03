@@ -244,6 +244,39 @@ def validate_go_toolchain(*, version: str, expected_sha256: str) -> dict[str, st
     return {"filename": filename, "sha256": digest, "size": size}
 
 
+def parse_variant_ci(raw: str) -> list[dict[str, Any]]:
+    """Return the fuzzer variants that pin their own CI build."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        variants = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"invalid fuzzer variants JSON: {exc}") from exc
+    if not isinstance(variants, list):
+        raise ValidationError("fuzzer variants JSON must be a list")
+    selected: list[dict[str, Any]] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            raise ValidationError("each fuzzer variant must be an object")
+        ci = variant.get("ci")
+        if not ci:
+            continue
+        if not isinstance(ci, dict):
+            raise ValidationError("fuzzer variant ci must be an object")
+        missing = [
+            field
+            for field in ("run_id", "artifact_name", "artifact_sha256", "commit")
+            if not str(ci.get(field, "") or "").strip()
+        ]
+        if missing:
+            raise ValidationError(
+                f"fuzzer variant {variant.get('key')!r} ci is missing: {', '.join(missing)}"
+            )
+        selected.append({"key": str(variant.get("key", "")), "ci": ci})
+    return selected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--echidna-ci-repo", default="")
@@ -251,6 +284,11 @@ def main() -> int:
     parser.add_argument("--echidna-ci-artifact-name", default="")
     parser.add_argument("--echidna-ci-artifact-sha256", default="")
     parser.add_argument("--echidna-ci-commit", default="")
+    parser.add_argument(
+        "--fuzzer-variants-json",
+        default="",
+        help="Fuzzer variants; every variant CI build is verified too.",
+    )
     parser.add_argument("--medusa-git-repo", default="")
     parser.add_argument("--medusa-git-ref", default="")
     parser.add_argument("--medusa-git-commit", default="")
@@ -267,6 +305,20 @@ def main() -> int:
                 artifact_name=args.echidna_ci_artifact_name,
                 artifact_sha256=args.echidna_ci_artifact_sha256,
                 expected_commit=args.echidna_ci_commit,
+            )
+            # A variant CI build reuses the run-level repository, so the
+            # same preflight applies to each one before any spend.
+            for variant in parse_variant_ci(args.fuzzer_variants_json):
+                results[f"echidna:{variant['key']}"] = validate_echidna_artifact(
+                    repo_url=args.echidna_ci_repo,
+                    run_id=variant["ci"]["run_id"],
+                    artifact_name=variant["ci"]["artifact_name"],
+                    artifact_sha256=variant["ci"]["artifact_sha256"],
+                    expected_commit=variant["ci"]["commit"],
+                )
+        elif parse_variant_ci(args.fuzzer_variants_json):
+            raise ValidationError(
+                "fuzzer variant CI builds require the run-level Echidna CI inputs"
             )
         if args.medusa_git_repo:
             results["medusa"] = validate_medusa_source(

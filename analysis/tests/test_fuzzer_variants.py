@@ -200,6 +200,7 @@ class VariantRequestValidationTests(unittest.TestCase):
                     "key": "echidna-2-2-6",
                     "base": "echidna",
                     "version": "2.2.6",
+                    "ci": {},
                     "env": {},
                 }
             ],
@@ -264,6 +265,89 @@ class VariantRequestValidationTests(unittest.TestCase):
         self.assertEqual(variant["env"], {"SCFUZZBENCH_WORKERS": "8"})
 
 
+class VariantCiBuildTests(unittest.TestCase):
+    """A variant can pin its own CI build of Echidna, for master-vs-PR runs."""
+
+    PR_CI = {
+        "run_id": "33555211362",
+        "artifact_name": "echidna-redistributable-x86_64-linux",
+        "artifact_sha256": "c480d8599e643ee587cdb51fdffadb73a5291f46d97002398ab6ffadc55198b0",
+        "commit": "55842ac2da34f40992cf48f211a0df1ede8e2fb9",
+    }
+
+    def test_accepts_a_ci_build_and_normalizes_case(self):
+        [variant] = validate_fuzzer_variants(
+            [
+                {
+                    "key": "echidna-pr-1614",
+                    "base": "echidna",
+                    "ci": dict(self.PR_CI, commit=self.PR_CI["commit"].upper()),
+                }
+            ]
+        )
+
+        self.assertEqual(variant["ci"], self.PR_CI)
+        self.assertEqual(variant["version"], "")
+
+    def test_ci_builds_are_echidna_only(self):
+        with self.assertRaisesRegex(ValueError, "only for echidna"):
+            validate_fuzzer_variants(
+                [{"key": "medusa-x", "base": "medusa", "ci": self.PR_CI}]
+            )
+
+    def test_a_variant_pins_a_version_or_a_ci_build_not_both(self):
+        with self.assertRaisesRegex(ValueError, "both a version and a CI build"):
+            validate_fuzzer_variants(
+                [
+                    {
+                        "key": "echidna-x",
+                        "base": "echidna",
+                        "version": "2.2.6",
+                        "ci": self.PR_CI,
+                    }
+                ]
+            )
+
+    def test_partial_ci_inputs_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "missing: artifact_name"):
+            validate_fuzzer_variants(
+                [{"key": "echidna-x", "base": "echidna", "ci": {"run_id": "1"}}]
+            )
+
+    def test_artifact_must_be_a_linux_build(self):
+        with self.assertRaisesRegex(ValueError, "Linux artifact"):
+            validate_fuzzer_variants(
+                [
+                    {
+                        "key": "echidna-x",
+                        "base": "echidna",
+                        "ci": dict(self.PR_CI, artifact_name="echidna-macos"),
+                    }
+                ]
+            )
+
+    def test_preflight_verifies_every_variant_build(self):
+        import importlib.util
+
+        script = REPO_ROOT / "scripts" / "validate_bleeding_edge_tools.py"
+        spec = importlib.util.spec_from_file_location("preflight", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        selected = module.parse_variant_ci(
+            json.dumps(
+                [
+                    {"key": "echidna-pr-1614", "base": "echidna", "ci": self.PR_CI},
+                    {"key": "echidna-release", "base": "echidna", "version": "2.2.6"},
+                ]
+            )
+        )
+
+        self.assertEqual([item["key"] for item in selected], ["echidna-pr-1614"])
+        with self.assertRaises(module.ValidationError):
+            module.parse_variant_ci(json.dumps([{"key": "x", "ci": {"run_id": "1"}}]))
+
+
 class VariantProvisioningContractTests(unittest.TestCase):
     """A variant is a distinct identity running its base fuzzer's scripts."""
 
@@ -313,6 +397,26 @@ class VariantProvisioningContractTests(unittest.TestCase):
         self.assertIn(
             "lookup(local.variant_version_by_key, instance.fuzzer.key, version)",
             self.main,
+        )
+
+    def test_each_instance_resolves_its_own_echidna_build(self):
+        self.assertIn(
+            "echidna_ci_run_id_b64            = "
+            "base64encode(local.instance_echidna_ci[instance_key].run_id)",
+            self.main,
+        )
+        self.assertIn(
+            "echidna_ci_commit_b64            = "
+            "base64encode(local.instance_echidna_ci[instance_key].commit)",
+            self.main,
+        )
+        # Repository and token stay run-level: one SSM parameter in the role.
+        self.assertIn(
+            'base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")',
+            self.main,
+        )
+        self.assertIn(
+            "length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled", self.main
         )
 
     def test_unlisted_or_unknown_keys_fail_the_plan(self):

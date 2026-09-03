@@ -19,6 +19,15 @@ pinned version, so a benchmark can compare two revisions of the same fuzzer:
 [{"key": "echidna-2-2-6", "base": "echidna", "version": "2.2.6"}]
 ```
 
+A variant can pin an Echidna CI build instead of a release, which is how one
+benchmark compares two Echidna builds:
+
+```json
+[{"key": "echidna-pr-1614", "base": "echidna",
+  "ci": {"run_id": "33555211362", "artifact_name": "echidna-redistributable-x86_64-linux",
+         "artifact_sha256": "c480...98b0", "commit": "55842ac2...e2fb9"}}]
+```
+
 The key must start with `<base>-` and must also be listed in `fuzzers`. The
 runner labels the variant by its key, which keeps the two revisions apart in
 artifact names and in the analysis charts. See `docs/operations.md`.

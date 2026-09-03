@@ -144,6 +144,12 @@ locals {
         key     = variant.key
         base    = variant.base
         version = variant.version
+        ci = variant.ci == null ? null : {
+          run_id          = variant.ci.run_id
+          artifact_name   = variant.ci.artifact_name
+          artifact_sha256 = lower(variant.ci.artifact_sha256)
+          commit          = lower(variant.ci.commit)
+        }
       }
     ]
     } : {}, var.shared_seed_corpus_source != "" ? {
@@ -300,6 +306,29 @@ locals {
     }
   }
 
+  # A variant may pin its own Echidna CI build. Repository and token parameter
+  # stay run-level, so the instance role still reads one SSM parameter.
+  variant_ci_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => variant.ci if variant.ci != null
+  }
+  instance_echidna_ci = {
+    for instance_key, instance in local.instance_map : instance_key => (
+      instance.fuzzer.base != "echidna" ? {
+        run_id          = ""
+        artifact_name   = ""
+        artifact_sha256 = ""
+        commit          = ""
+        } : lookup(local.variant_ci_by_key, instance.fuzzer.key, {
+          run_id          = var.echidna_ci_run_id
+          artifact_name   = var.echidna_ci_artifact_name
+          artifact_sha256 = var.echidna_ci_artifact_sha256
+          commit          = var.echidna_ci_commit
+      })
+    )
+  }
+  variant_ci_keys = sort(keys(local.variant_ci_by_key))
+
   # Install-mode wiring follows the base fuzzer, so an Echidna variant still
   # gets Echidna's CI-artifact inputs.
   selected_fuzzer_bases = [for fuzzer in local.fuzzer_definitions : fuzzer.base]
@@ -348,10 +377,10 @@ locals {
         foundry_git_ref_b64              = base64encode(var.foundry_git_ref)
         echidna_version_b64              = base64encode(local.instance_tool_version[instance_key]["echidna"])
         echidna_ci_repo_b64              = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")
-        echidna_ci_run_id_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_run_id : "")
-        echidna_ci_artifact_name_b64     = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_name : "")
-        echidna_ci_artifact_sha256_b64   = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_sha256 : "")
-        echidna_ci_commit_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_commit : "")
+        echidna_ci_run_id_b64            = base64encode(local.instance_echidna_ci[instance_key].run_id)
+        echidna_ci_artifact_name_b64     = base64encode(local.instance_echidna_ci[instance_key].artifact_name)
+        echidna_ci_artifact_sha256_b64   = base64encode(local.instance_echidna_ci[instance_key].artifact_sha256)
+        echidna_ci_commit_b64            = base64encode(local.instance_echidna_ci[instance_key].commit)
         echidna_ci_token_ssm_parameter_name_b64 = base64encode(
           instance.fuzzer.base == "echidna" ? var.echidna_ci_token_ssm_parameter_name : ""
         )
@@ -852,6 +881,11 @@ resource "aws_instance" "fuzzer" {
     precondition {
       condition     = var.echidna_ci_token_kms_key_arn == "" || local.echidna_ci_enabled
       error_message = "echidna_ci_token_kms_key_arn is valid only with Echidna CI artifact mode."
+    }
+
+    precondition {
+      condition     = length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled
+      error_message = "Fuzzer variant CI builds require the run-level Echidna CI inputs: ${join(", ", local.variant_ci_keys)}."
     }
 
     precondition {

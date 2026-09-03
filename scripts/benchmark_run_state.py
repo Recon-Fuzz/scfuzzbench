@@ -610,7 +610,7 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
     for entry in value:
         if not isinstance(entry, dict):
             raise ValueError("each fuzzer variant must be a JSON object")
-        unknown_fields = sorted(set(entry) - {"key", "base", "version", "env"})
+        unknown_fields = sorted(set(entry) - {"key", "base", "version", "ci", "env"})
         if unknown_fields:
             raise ValueError(
                 f"fuzzer variant has unsupported field(s): {', '.join(unknown_fields)}"
@@ -628,6 +628,19 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
         if key in seen:
             raise ValueError(f"duplicate fuzzer variant key: {key!r}")
         seen.add(key)
+        # A variant may instead pin a bleeding-edge CI build of its base. The
+        # repository and token parameter are inherited from the run-level
+        # Echidna CI inputs, so the instance role still reads exactly one SSM
+        # parameter.
+        ci = entry.get("ci", {})
+        if ci is None:
+            ci = {}
+        if ci:
+            if base != "echidna":
+                raise ValueError(
+                    f"fuzzer variant {key!r} may pin a CI build only for echidna"
+                )
+            ci = validate_variant_ci(key, ci)
         # A variant pins its revision through this field: tool versions are
         # never accepted as environment overrides.
         version = entry.get("version", "")
@@ -638,15 +651,59 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
         env = entry.get("env", {})
         if env is None:
             env = {}
+        if ci and version:
+            raise ValueError(
+                f"fuzzer variant {key!r} cannot pin both a version and a CI build"
+            )
         variants.append(
             {
                 "key": key,
                 "base": base,
                 "version": version,
+                "ci": ci,
                 "env": validate_fuzzer_env_map(env),
             }
         )
     return variants
+
+
+def validate_variant_ci(key: str, value: Any) -> dict[str, str]:
+    """Validate one variant's Echidna CI artifact override."""
+    if not isinstance(value, dict):
+        raise ValueError(f"fuzzer variant {key!r} ci must be a JSON object")
+    required = ("run_id", "artifact_name", "artifact_sha256", "commit")
+    unknown = sorted(set(value) - set(required))
+    if unknown:
+        raise ValueError(
+            f"fuzzer variant {key!r} ci has unsupported field(s): {', '.join(unknown)}"
+        )
+    missing = [field for field in required if not str(value.get(field, "") or "").strip()]
+    if missing:
+        raise ValueError(
+            f"fuzzer variant {key!r} ci requires run ID, artifact name, artifact "
+            f"SHA-256, and full commit together; missing: {', '.join(missing)}"
+        )
+    ci = {field: str(value[field]).strip() for field in required}
+    if not ci["run_id"].isdigit() or int(ci["run_id"]) < 1:
+        raise ValueError(f"fuzzer variant {key!r} ci run_id must be a positive integer")
+    if (
+        not re.fullmatch(r"[A-Za-z0-9._-]+", ci["artifact_name"])
+        or "linux" not in ci["artifact_name"].lower()
+    ):
+        raise ValueError(
+            f"fuzzer variant {key!r} ci artifact_name must identify a Linux artifact"
+        )
+    if not re.fullmatch(r"[A-Fa-f0-9]{64}", ci["artifact_sha256"]):
+        raise ValueError(
+            f"fuzzer variant {key!r} ci artifact_sha256 must be a SHA-256 digest"
+        )
+    if not re.fullmatch(r"[A-Fa-f0-9]{40}", ci["commit"]):
+        raise ValueError(
+            f"fuzzer variant {key!r} ci commit must be a full 40-character SHA"
+        )
+    ci["artifact_sha256"] = ci["artifact_sha256"].lower()
+    ci["commit"] = ci["commit"].lower()
+    return ci
 
 
 def validate_fuzzer_env_map(value: Any) -> dict[str, str]:
@@ -835,6 +892,22 @@ def validate_benchmark_inputs(values: dict[str, str]) -> dict[str, Any]:
         echidna_kms_arn,
     ):
         raise ValueError("echidna_ci_token_kms_key_arn must be an exact KMS key ARN")
+
+    # A variant CI build inherits the repository and token parameter, so the
+    # run-level Echidna CI inputs must be present.
+    variant_ci_keys = [variant["key"] for variant in variants if variant["ci"]]
+    if variant_ci_keys and not echidna_count:
+        raise ValueError(
+            "fuzzer variant CI builds require the run-level Echidna CI inputs: "
+            + ", ".join(variant_ci_keys)
+        )
+    variant_ci_commits = {
+        variant["ci"]["commit"] for variant in variants if variant["ci"]
+    }
+    if variant_ci_commits and echidna_ci["ECHIDNA_CI_COMMIT"].lower() in variant_ci_commits:
+        raise ValueError(
+            "a fuzzer variant CI build must differ from the run-level Echidna commit"
+        )
 
     medusa_source_names = (
         "MEDUSA_GIT_REPO",

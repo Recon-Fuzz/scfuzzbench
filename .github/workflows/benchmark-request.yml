@@ -437,7 +437,7 @@ jobs:
                   continue;
                 }
                 const unknownFields = Object.keys(variant).filter(
-                  (field) => !["key", "base", "version", "env"].includes(field)
+                  (field) => !["key", "base", "version", "ci", "env"].includes(field)
                 );
                 if (unknownFields.length > 0) {
                   errors.push(`fuzzer variant has unsupported field(s): ${unknownFields.join(", ")}`);
@@ -474,6 +474,69 @@ jobs:
                   errors.push(`Invalid version for fuzzer variant ${key}`);
                   continue;
                 }
+                // A variant may instead pin its own Echidna CI build. The
+                // repository and token parameter stay run-level.
+                const ciRaw = variant["ci"] === undefined || variant["ci"] === null
+                  ? null
+                  : variant["ci"];
+                let ci = null;
+                if (ciRaw !== null) {
+                  if (typeof ciRaw !== "object" || Array.isArray(ciRaw)) {
+                    errors.push(`Fuzzer variant ci for ${key} must be a JSON object`);
+                    continue;
+                  }
+                  if (base !== "echidna") {
+                    errors.push(`Fuzzer variant ${key} may pin a CI build only for echidna`);
+                    continue;
+                  }
+                  if (version) {
+                    errors.push(`Fuzzer variant ${key} cannot pin both a version and a CI build`);
+                    continue;
+                  }
+                  const ciFields = ["run_id", "artifact_name", "artifact_sha256", "commit"];
+                  const unknownCi = Object.keys(ciRaw).filter((field) => !ciFields.includes(field));
+                  if (unknownCi.length > 0) {
+                    errors.push(`Fuzzer variant ${key} ci has unsupported field(s): ${unknownCi.join(", ")}`);
+                    continue;
+                  }
+                  const missingCi = ciFields.filter(
+                    (field) => typeof ciRaw[field] !== "string" || !ciRaw[field].trim()
+                  );
+                  if (missingCi.length > 0) {
+                    errors.push(
+                      `Fuzzer variant ${key} ci requires run_id, artifact_name, artifact_sha256 ` +
+                        `and commit together; missing: ${missingCi.join(", ")}`
+                    );
+                    continue;
+                  }
+                  const runId = ciRaw.run_id.trim();
+                  const artifactName = ciRaw.artifact_name.trim();
+                  const artifactSha = ciRaw.artifact_sha256.trim();
+                  const ciCommit = ciRaw.commit.trim();
+                  if (!/^[1-9][0-9]*$/.test(runId)) {
+                    errors.push(`Fuzzer variant ${key} ci run_id must be a positive integer`);
+                    continue;
+                  }
+                  if (!/^[A-Za-z0-9._-]+$/.test(artifactName) || !artifactName.toLowerCase().includes("linux")) {
+                    errors.push(`Fuzzer variant ${key} ci artifact_name must identify a Linux artifact`);
+                    continue;
+                  }
+                  if (!/^[A-Fa-f0-9]{64}$/.test(artifactSha)) {
+                    errors.push(`Fuzzer variant ${key} ci artifact_sha256 must be a SHA-256 digest`);
+                    continue;
+                  }
+                  if (!/^[A-Fa-f0-9]{40}$/.test(ciCommit)) {
+                    errors.push(`Fuzzer variant ${key} ci commit must be a full 40-character SHA`);
+                    continue;
+                  }
+                  ci = {
+                    run_id: runId,
+                    artifact_name: artifactName,
+                    artifact_sha256: artifactSha.toLowerCase(),
+                    commit: ciCommit.toLowerCase(),
+                  };
+                }
+
                 const variantEnvRaw = variant["env"] === undefined || variant["env"] === null
                   ? {}
                   : variant["env"];
@@ -492,6 +555,7 @@ jobs:
                   key,
                   base,
                   version,
+                  ...(ci ? { ci } : {}),
                   env: variantEnv.value ? JSON.parse(variantEnv.value) : {},
                 });
               }
@@ -626,6 +690,29 @@ jobs:
             if (echidnaCiCount !== 0 && echidnaCiCount !== echidnaCiFields.length) {
               errors.push(
                 "Echidna CI mode requires echidna_ci_repo, run_id, artifact_name, artifact_sha256, commit, and token SSM parameter together"
+              );
+            }
+            // A variant CI build inherits the repository and token parameter,
+            // so the run-level Echidna CI inputs must be present.
+            const variantCiKeys = sanitizedVariants
+              .filter((variant) => variant.ci)
+              .map((variant) => variant.key);
+            if (variantCiKeys.length > 0 && echidnaCiCount !== echidnaCiFields.length) {
+              errors.push(
+                "Fuzzer variant CI builds require the run-level Echidna CI inputs: " +
+                  variantCiKeys.join(", ")
+              );
+            }
+            if (
+              variantCiKeys.length > 0 &&
+              echidna_ci_commit.ok &&
+              sanitizedVariants.some(
+                (variant) =>
+                  variant.ci && variant.ci.commit === echidna_ci_commit.value.toLowerCase()
+              )
+            ) {
+              errors.push(
+                "A fuzzer variant CI build must differ from the run-level Echidna commit"
               );
             }
             if (echidnaCiCount === echidnaCiFields.length) {
