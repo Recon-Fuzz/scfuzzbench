@@ -137,12 +137,13 @@ locals {
     properties_path              = var.properties_path
     fuzzer_keys                  = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
     }, length(local.selected_variants) > 0 ? {
+    # The manifest is public: publish only variant identity and revision, the
+    # same way fuzzer_env values are never declassified.
     fuzzer_variants = [
       for variant in local.selected_variants : {
         key     = variant.key
         base    = variant.base
         version = variant.version
-        env     = variant.env
       }
     ]
     } : {}, var.shared_seed_corpus_source != "" ? {

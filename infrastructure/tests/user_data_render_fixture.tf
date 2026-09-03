@@ -63,6 +63,7 @@ locals {
   modes = {
     echidna-stable = {
       fuzzer_key               = "echidna"
+      fuzzer_script_key        = "echidna"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -77,6 +78,7 @@ locals {
     }
     echidna-ci = {
       fuzzer_key               = "echidna"
+      fuzzer_script_key        = "echidna"
       echidna_ci_repo          = "https://github.com/crytic/echidna"
       echidna_ci_run_id        = "123456789"
       echidna_ci_artifact_name = "echidna-linux-x86_64"
@@ -91,6 +93,7 @@ locals {
     }
     medusa-stable = {
       fuzzer_key               = "medusa"
+      fuzzer_script_key        = "medusa"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -105,6 +108,7 @@ locals {
     }
     medusa-source = {
       fuzzer_key               = "medusa"
+      fuzzer_script_key        = "medusa"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -119,6 +123,7 @@ locals {
     }
     foundry = {
       fuzzer_key               = "foundry"
+      fuzzer_script_key        = "foundry"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -133,6 +138,22 @@ locals {
     }
     recon = {
       fuzzer_key               = "recon-fuzzer"
+      fuzzer_script_key        = "recon-fuzzer"
+      echidna_ci_repo          = ""
+      echidna_ci_run_id        = ""
+      echidna_ci_artifact_name = ""
+      echidna_ci_artifact_sha  = ""
+      echidna_ci_commit        = ""
+      echidna_ci_token         = ""
+      medusa_git_repo          = ""
+      medusa_git_ref           = ""
+      medusa_git_commit        = ""
+      medusa_go_version        = ""
+      medusa_go_sha            = ""
+    }
+    echidna-variant = {
+      fuzzer_key               = "echidna-2-2-6"
+      fuzzer_script_key        = "echidna"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -157,6 +178,7 @@ locals {
         scfuzzbench_repository_b64              = base64encode(local.repository)
         scfuzzbench_commit_b64                  = base64encode(local.commit)
         fuzzer_key_b64                          = base64encode(mode.fuzzer_key)
+        fuzzer_script_key_b64                   = base64encode(mode.fuzzer_script_key)
         aws_region_b64                          = base64encode("us-east-1")
         s3_bucket_b64                           = base64encode("test-bucket")
         run_id_b64                              = base64encode("gh-1-1")

@@ -124,6 +124,7 @@ class TerraformInputBoundaryTests(unittest.TestCase):
                 "foundry_source_patch",
                 "foundry_version",
                 "fuzzer_keys",
+                "fuzzer_variants",
                 "instance_type",
                 "instances_per_fuzzer",
                 "medusa_git_commit",
@@ -477,6 +478,8 @@ locals {
             expected_modes = {
                 "echidna-stable",
                 "echidna-ci",
+                # A fuzzer variant: its own key, its base fuzzer's scripts.
+                "echidna-variant",
                 "medusa-stable",
                 "medusa-source",
                 "foundry",
@@ -504,6 +507,18 @@ locals {
                         check=False,
                     )
                     self.assertEqual(0, syntax.returncode, syntax.stderr)
+
+            variant = rendered_by_mode["echidna-variant"]
+            self.assertIn(
+                "decode_b64_into fuzzer_key '"
+                + base64.b64encode(b"echidna-2-2-6").decode(),
+                variant,
+            )
+            self.assertIn(
+                "decode_b64_into fuzzer_script_key '"
+                + base64.b64encode(b"echidna").decode(),
+                variant,
+            )
 
             rendered = rendered_by_mode["echidna-ci"]
             self.assertNotIn(malicious, rendered)
