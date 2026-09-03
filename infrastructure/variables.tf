@@ -702,7 +702,7 @@ variable "fuzzer_variants" {
   validation {
     condition = alltrue([
       for variant in var.fuzzer_variants :
-      variant.ci == null || variant.base == "echidna"
+      variant.ci == null ? true : variant.base == "echidna"
     ])
     error_message = "fuzzer_variants may pin a CI build only for the echidna base."
   }
@@ -710,15 +710,17 @@ variable "fuzzer_variants" {
   validation {
     condition = alltrue([
       for variant in var.fuzzer_variants :
-      variant.ci == null || variant.version == ""
+      variant.ci == null ? true : variant.version == ""
     ])
     error_message = "A fuzzer variant cannot pin both a version and a CI build."
   }
 
+  # The conditional operator is required here: Terraform evaluates both sides
+  # of "||", which would dereference a null ci on release-pinned variants.
   validation {
     condition = alltrue([
       for variant in var.fuzzer_variants :
-      variant.ci == null || (
+      variant.ci == null ? true : (
         can(regex("^[1-9][0-9]*$", variant.ci.run_id)) &&
         can(regex("^[A-Za-z0-9._-]+$", variant.ci.artifact_name)) &&
         strcontains(lower(variant.ci.artifact_name), "linux") &&

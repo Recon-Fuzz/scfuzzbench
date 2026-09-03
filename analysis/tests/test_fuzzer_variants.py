@@ -326,6 +326,23 @@ class VariantCiBuildTests(unittest.TestCase):
                 ]
             )
 
+    def test_a_release_variant_opts_out_of_the_run_level_build(self):
+        """Otherwise both sides would install the same bleeding-edge binary."""
+        main = (REPO_ROOT / "infrastructure" / "main.tf").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "variant_release_keys = [\n"
+            "    for variant in var.fuzzer_variants :\n"
+            '    variant.key if variant.version != ""',
+            main,
+        )
+        for resolved in ("instance_echidna_ci", "instance_medusa_source"):
+            with self.subTest(resolved=resolved):
+                block = main.split(f"  {resolved} = {{", 1)[1].split("\n  }", 1)[0]
+                self.assertIn(
+                    "contains(local.variant_release_keys, instance.fuzzer.key)", block
+                )
+
     def test_preflight_verifies_every_variant_build(self):
         import importlib.util
 

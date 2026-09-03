@@ -312,9 +312,16 @@ locals {
     for variant in var.fuzzer_variants :
     variant.key => variant.ci if variant.ci != null
   }
+  # A variant that pins its own release opts out of the run-level bleeding-edge
+  # build, so a CI build can be compared against a published release.
+  variant_release_keys = [
+    for variant in var.fuzzer_variants :
+    variant.key if variant.version != ""
+  ]
   instance_echidna_ci = {
     for instance_key, instance in local.instance_map : instance_key => (
-      instance.fuzzer.base != "echidna" ? {
+      instance.fuzzer.base != "echidna" ||
+      contains(local.variant_release_keys, instance.fuzzer.key) ? {
         run_id          = ""
         artifact_name   = ""
         artifact_sha256 = ""
@@ -325,6 +332,20 @@ locals {
           artifact_sha256 = var.echidna_ci_artifact_sha256
           commit          = var.echidna_ci_commit
       })
+    )
+  }
+  instance_medusa_source = {
+    for instance_key, instance in local.instance_map : instance_key => (
+      instance.fuzzer.base != "medusa" ||
+      contains(local.variant_release_keys, instance.fuzzer.key) ? {
+        git_repo   = ""
+        git_ref    = ""
+        git_commit = ""
+        } : {
+        git_repo   = var.medusa_git_repo
+        git_ref    = var.medusa_git_ref
+        git_commit = var.medusa_git_commit
+      }
     )
   }
   variant_ci_keys = sort(keys(local.variant_ci_by_key))
@@ -386,19 +407,19 @@ locals {
         )
         medusa_version_b64 = base64encode(local.instance_tool_version[instance_key]["medusa"])
         medusa_git_repo_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_repo : ""
+          local.instance_medusa_source[instance_key].git_repo
         )
         medusa_git_ref_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_ref : ""
+          local.instance_medusa_source[instance_key].git_ref
         )
         medusa_git_commit_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_commit : ""
+          local.instance_medusa_source[instance_key].git_commit
         )
         medusa_go_version_b64 = base64encode(
-          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_version : ""
+          local.instance_medusa_source[instance_key].git_repo != "" ? var.medusa_go_version : ""
         )
         medusa_go_sha256_b64 = base64encode(
-          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_sha256 : ""
+          local.instance_medusa_source[instance_key].git_repo != "" ? var.medusa_go_sha256 : ""
         )
         recon_version_b64                 = base64encode(local.instance_tool_version[instance_key]["recon-fuzzer"])
         git_token_ssm_parameter_name_b64  = base64encode(var.git_token_ssm_parameter_name)

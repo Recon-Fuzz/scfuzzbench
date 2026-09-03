@@ -35,8 +35,14 @@ class BleedingEdgeInfrastructureContractTests(unittest.TestCase):
             'var.echidna_ci_repo : "")',
             main,
         )
+        # Medusa source inputs are resolved per instance so a variant that
+        # pins a release opts out of the run-level source build.
         self.assertIn(
-            'instance.fuzzer.base == "medusa" ? var.medusa_git_repo : ""',
+            'instance.fuzzer.base != "medusa" ||',
+            main,
+        )
+        self.assertIn(
+            "local.instance_medusa_source[instance_key].git_repo",
             main,
         )
         self.assertIn(
