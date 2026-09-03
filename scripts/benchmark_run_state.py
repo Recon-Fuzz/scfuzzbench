@@ -53,6 +53,7 @@ FUZZER_ENV_MAX_ENTRIES = 64
 FUZZER_ENV_MAX_UTF8_BYTES = 4096
 HEARTBEAT_STALE_SECONDS = 30 * 60
 SUPPORTED_FUZZERS = {"echidna", "foundry", "medusa", "recon-fuzzer"}
+FUZZER_VARIANTS_MAX_ENTRIES = 8
 ACTIVE_RUN_STATUSES = {"reserved", "running", "provisioning-failed"}
 IMMUTABLE_FUZZER_ENV_KEYS = {
     "AWS_ACCESS_KEY_ID",
@@ -335,6 +336,9 @@ def validate_recovery_inputs(
             raise ValueError(f"{name} do not match the shared artifact bucket")
     if "fuzzer_env" in tfvars_payload:
         raise ValueError("recovery inputs must not persist fuzzer_env")
+    for variant in tfvars_payload.get("fuzzer_variants", []) or []:
+        if isinstance(variant, dict) and "env" in variant:
+            raise ValueError("recovery inputs must not persist fuzzer variant env")
     status = str(metadata_payload.get("status", ""))
     if status not in ACTIVE_RUN_STATUSES:
         raise ValueError(f"run metadata has invalid active status {status!r}")
@@ -587,6 +591,64 @@ def validate_fuzzer_env_entry(key: Any, env_value: Any) -> None:
             )
 
 
+def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
+    """Validate variants: a built-in fuzzer run again under its own key.
+
+    Two revisions of one fuzzer in a single benchmark are expressed as a
+    variant, whose key must stay prefixed with its base fuzzer so runners and
+    the analysis scripts can still tell which fuzzer produced a run.
+    """
+    if not isinstance(value, list):
+        raise ValueError("fuzzer_variants_json must be a JSON list")
+    if len(value) > FUZZER_VARIANTS_MAX_ENTRIES:
+        raise ValueError(
+            "fuzzer_variants_json must contain at most "
+            f"{FUZZER_VARIANTS_MAX_ENTRIES} entries"
+        )
+    variants: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("each fuzzer variant must be a JSON object")
+        unknown_fields = sorted(set(entry) - {"key", "base", "version", "env"})
+        if unknown_fields:
+            raise ValueError(
+                f"fuzzer variant has unsupported field(s): {', '.join(unknown_fields)}"
+            )
+        key = entry.get("key")
+        base = entry.get("base")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", key):
+            raise ValueError(f"invalid fuzzer variant key: {key!r}")
+        if not isinstance(base, str) or base not in SUPPORTED_FUZZERS:
+            raise ValueError(f"fuzzer variant base is not a supported fuzzer: {base!r}")
+        if not key.startswith(f"{base}-"):
+            raise ValueError(f"fuzzer variant key {key!r} must start with '{base}-'")
+        if key in SUPPORTED_FUZZERS:
+            raise ValueError(f"fuzzer variant key {key!r} shadows a built-in fuzzer")
+        if key in seen:
+            raise ValueError(f"duplicate fuzzer variant key: {key!r}")
+        seen.add(key)
+        # A variant pins its revision through this field: tool versions are
+        # never accepted as environment overrides.
+        version = entry.get("version", "")
+        if version is None:
+            version = ""
+        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9._+-]*", version):
+            raise ValueError(f"invalid version for fuzzer variant {key!r}")
+        env = entry.get("env", {})
+        if env is None:
+            env = {}
+        variants.append(
+            {
+                "key": key,
+                "base": base,
+                "version": version,
+                "env": validate_fuzzer_env_map(env),
+            }
+        )
+    return variants
+
+
 def validate_fuzzer_env_map(value: Any) -> dict[str, str]:
     if not isinstance(value, dict):
         raise ValueError("fuzzer_env_json must be a JSON object")
@@ -665,16 +727,31 @@ def validate_benchmark_inputs(values: dict[str, str]) -> dict[str, Any]:
         )
     except json.JSONDecodeError as exc:
         raise ValueError(f"fuzzers_json must be valid JSON: {exc}") from exc
+    try:
+        variants = validate_fuzzer_variants(
+            json.loads(value("FUZZER_VARIANTS_JSON") or "[]")
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"fuzzer_variants_json must be valid JSON: {exc}") from exc
+    variant_keys = [variant["key"] for variant in variants]
+    selectable_fuzzers = SUPPORTED_FUZZERS | set(variant_keys)
     if (
         not isinstance(fuzzers, list)
         or not fuzzers
-        or len(fuzzers) > len(SUPPORTED_FUZZERS)
+        or len(fuzzers) > len(selectable_fuzzers)
         or any(not isinstance(item, str) for item in fuzzers)
         or len(set(fuzzers)) != len(fuzzers)
-        or not set(fuzzers).issubset(SUPPORTED_FUZZERS)
+        or not set(fuzzers).issubset(selectable_fuzzers)
     ):
         raise ValueError(
-            "fuzzers_json must be a unique, non-empty list of supported fuzzers"
+            "fuzzers_json must be a unique, non-empty list of supported fuzzers "
+            "and declared fuzzer variant keys"
+        )
+    unscheduled = [key for key in variant_keys if key not in fuzzers]
+    if unscheduled:
+        raise ValueError(
+            "fuzzers_json must list every fuzzer variant key; missing: "
+            + ", ".join(unscheduled)
         )
 
     safe_token = re.compile(r"^[A-Za-z0-9._+-]*$")

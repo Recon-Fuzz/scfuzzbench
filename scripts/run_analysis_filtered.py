@@ -116,13 +116,6 @@ def main() -> int:
             log_files,
             include_coverage=args.coverage_over_time,
         )
-    if args.raw_labels:
-        with timed_step("apply_raw_labels", timings):
-            events = analyze._apply_raw_labels_events(events)
-            throughput_samples = analyze._apply_raw_labels_throughput(throughput_samples)
-            progress_metrics_samples = analyze._apply_raw_labels_progress(
-                progress_metrics_samples
-            )
     if exclude:
         with timed_step("filter_fuzzers", timings):
             events = [
@@ -140,6 +133,31 @@ def main() -> int:
                 for sample in progress_metrics_samples
                 if sample.fuzzer.lower() not in exclude and sample.fuzzer_label.lower() not in exclude
             ]
+
+    # Series names are resolved after filtering, so excluding one revision of a
+    # fuzzer leaves the other one named after the plain fuzzer again.
+    with timed_step("resolve_fuzzer_series", timings):
+        kept_labels = [
+            record.fuzzer_label
+            for record in (*events, *throughput_samples, *progress_metrics_samples)
+        ]
+        inventory_labels = [
+            label
+            for label in analyze.fuzzer_labels_from_logs(args.logs_dir)
+            if not exclude
+            or (
+                label.lower() not in exclude
+                and analyze.normalize_fuzzer(label).lower() not in exclude
+            )
+        ]
+        series_map = analyze.build_series_map(
+            kept_labels + inventory_labels, raw_labels=args.raw_labels
+        )
+        events = analyze.apply_series_map(events, series_map)
+        throughput_samples = analyze.apply_series_map(throughput_samples, series_map)
+        progress_metrics_samples = analyze.apply_series_map(
+            progress_metrics_samples, series_map
+        )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     with timed_step("write_event_outputs", timings):

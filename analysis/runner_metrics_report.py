@@ -170,7 +170,26 @@ def collect_metrics(
 
     if not frames:
         return pd.DataFrame(columns=TIMESERIES_COLS)
-    return pd.concat(frames, ignore_index=True)
+    return apply_series_names(
+        pd.concat(frames, ignore_index=True), logs_dir, raw_labels=raw_labels
+    )
+
+
+def apply_series_names(
+    df: pd.DataFrame, logs_dir: Path, *, raw_labels: bool = False
+) -> pd.DataFrame:
+    """Name a series after its label when one fuzzer ran several revisions."""
+    if df.empty:
+        return df
+    series_map = analyze.build_series_map(
+        analyze.fuzzer_labels_from_logs(logs_dir) + df["fuzzer_label"].astype(str).tolist(),
+        raw_labels=raw_labels,
+    )
+    work = df.copy()
+    work["fuzzer"] = [
+        analyze.series_for_label(str(label), series_map) for label in work["fuzzer_label"]
+    ]
+    return work
 
 
 def write_timeseries_csv(df: pd.DataFrame, out_csv: Path) -> None:

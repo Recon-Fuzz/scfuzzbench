@@ -521,6 +521,25 @@ def fetch_ec2_pricing_table(instance_types: set[str], *, profile: str | None, re
 FUZZER_VERSION_KEY_ALIASES = {"recon-fuzzer": "recon"}
 
 
+def variant_map(manifest: dict) -> dict[str, dict]:
+    """Fuzzer variants (one fuzzer, another revision) keyed by fuzzer key."""
+    variants: dict[str, dict] = {}
+    raw = manifest.get("fuzzer_variants")
+    if not isinstance(raw, list):
+        return variants
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key", "")).strip()
+        if not key:
+            continue
+        variants[key] = {
+            "base": str(item.get("base", "")).strip(),
+            "version": str(item.get("version", "")).strip(),
+        }
+    return variants
+
+
 def format_fuzzer_lines(manifest: dict) -> list[str]:
     ordered_fuzzers: list[str] = []
     if isinstance(manifest.get("fuzzer_keys"), list):
@@ -557,11 +576,18 @@ def format_fuzzer_lines(manifest: dict) -> list[str]:
         if git_commit:
             versions["medusa"] = f"git:{git_commit[:7]}"
 
+    variants = variant_map(manifest)
+
     lines: list[str] = []
     for fuzzer in ordered_fuzzers:
-        version = versions.get(fuzzer, "").strip()
+        # A variant pins its own release; otherwise it shows its base version.
+        variant = variants.get(fuzzer)
+        base = variant["base"] if variant and variant["base"] else fuzzer
+        version = variant["version"] if variant else ""
         if not version:
-            alias = FUZZER_VERSION_KEY_ALIASES.get(fuzzer)
+            version = versions.get(base, "").strip()
+        if not version:
+            alias = FUZZER_VERSION_KEY_ALIASES.get(base)
             if alias:
                 version = versions.get(alias, "").strip()
         line = f"{fuzzer} ({version})" if version else fuzzer

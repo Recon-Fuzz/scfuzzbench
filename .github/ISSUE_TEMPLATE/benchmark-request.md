@@ -29,6 +29,7 @@ Notes:
   "timeout_hours": 1,
   "preliminary_interval_minutes": 60,
   "fuzzers": ["echidna", "medusa", "foundry", "recon-fuzzer"],
+  "fuzzer_variants": [],
   "foundry_git_repo": "",
   "foundry_git_ref": "",
   "echidna_version": "",

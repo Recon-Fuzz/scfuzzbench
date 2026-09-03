@@ -20,12 +20,12 @@ if [[ -n "${MEDUSA_GIT_REPO:-}" ]]; then
     log "Invalid resolved Medusa source commit provenance"
     exit 1
   fi
-  SCFUZZBENCH_FUZZER_LABEL="medusa-git-${medusa_git_commit:0:12}"
+  default_fuzzer_label="medusa-git-${medusa_git_commit:0:12}"
 else
   require_env MEDUSA_VERSION
-  SCFUZZBENCH_FUZZER_LABEL="medusa-v${MEDUSA_VERSION}"
+  default_fuzzer_label="medusa-v${MEDUSA_VERSION}"
 fi
-export SCFUZZBENCH_FUZZER_LABEL
+set_fuzzer_label "medusa" "${default_fuzzer_label}"
 
 clone_target
 capture_target_workspace_anchor

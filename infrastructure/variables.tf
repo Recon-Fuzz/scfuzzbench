@@ -407,12 +407,18 @@ variable "fuzzers" {
     error_message = "fuzzers must contain unique fuzzer keys matching ^[a-z0-9][a-z0-9-]{0,63}$."
   }
 
+  # Variant keys are "<built-in>-<suffix>". That they were actually declared in
+  # fuzzer_variants is checked at plan time: variable validation cannot read
+  # another variable.
   validation {
     condition = alltrue([
       for fuzzer in var.fuzzers :
-      contains(["echidna", "foundry", "medusa", "recon-fuzzer"], fuzzer)
+      anytrue([
+        for builtin in ["echidna", "foundry", "medusa", "recon-fuzzer"] :
+        fuzzer == builtin || startswith(fuzzer, "${builtin}-")
+      ])
     ])
-    error_message = "fuzzers may contain only the built-in cloud fuzzers: echidna, foundry, medusa, and recon-fuzzer."
+    error_message = "fuzzers may contain only the built-in cloud fuzzers (echidna, foundry, medusa, recon-fuzzer) and their \"<built-in>-<suffix>\" variant keys."
   }
 }
 
@@ -629,6 +635,84 @@ variable "fuzzer_env" {
       )
     ])
     error_message = "Fuzzer corpus directory overrides must be safe repo-relative paths without '.' or '..' segments."
+  }
+}
+
+variable "fuzzer_variants" {
+  type = list(object({
+    key     = string
+    base    = string
+    version = optional(string, "")
+    env     = optional(map(string), {})
+  }))
+  description = "Extra runs of a built-in fuzzer under a new key with its own env, so one benchmark can compare two revisions of the same fuzzer."
+  default     = []
+
+  validation {
+    condition     = length(var.fuzzer_variants) <= 8
+    error_message = "fuzzer_variants must contain at most 8 entries."
+  }
+
+  validation {
+    condition = length(var.fuzzer_variants) == length(distinct([
+      for variant in var.fuzzer_variants : variant.key
+    ]))
+    error_message = "fuzzer_variants keys must be unique."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      contains(["echidna", "foundry", "medusa", "recon-fuzzer"], variant.base)
+    ])
+    error_message = "fuzzer_variants base must be a built-in fuzzer: echidna, foundry, medusa, or recon-fuzzer."
+  }
+
+  # The "<base>-" prefix keeps the runtime label parseable by the analysis
+  # scripts, which pick a log parser from the fuzzer name in the label.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      can(regex("^[a-z0-9][a-z0-9-]{0,63}$", variant.key)) &&
+      startswith(variant.key, "${variant.base}-") &&
+      !contains(["echidna", "foundry", "medusa", "recon-fuzzer"], variant.key)
+    ])
+    error_message = "Each fuzzer_variants key must match ^[a-z0-9][a-z0-9-]{0,63}$, start with \"<base>-\", and must not shadow a built-in fuzzer."
+  }
+
+  # Tool versions stay first-class inputs rather than environment overrides,
+  # so a variant's revision is recorded in the benchmark manifest.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      can(regex("^[A-Za-z0-9._+-]*$", variant.version))
+    ])
+    error_message = "fuzzer_variants version must contain only [A-Za-z0-9._+-]."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      length(variant.env) <= 64
+    ])
+    error_message = "Each fuzzer_variants env must contain at most 64 entries."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      sum(concat(
+        [0],
+        [
+          for key, value in variant.env :
+          (length(base64encode(key)) * 3 / 4) -
+          length(regexall("=", base64encode(key))) +
+          (length(base64encode(value)) * 3 / 4) -
+          length(regexall("=", base64encode(value)))
+        ]
+      )) <= 4096
+    ])
+    error_message = "Each fuzzer_variants env must contain at most 4096 aggregate UTF-8 bytes."
   }
 }
 

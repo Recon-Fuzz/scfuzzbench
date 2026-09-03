@@ -10,6 +10,7 @@ Set inputs via `-var`/`tfvars` (`TF_VAR_*` also works):
 - `benchmark_type` (`property` or `optimization`)
 - `instance_type`, `instances_per_fuzzer`, `timeout_hours`
 - `fuzzers` (allowlist; empty means all available)
+- `fuzzer_variants` (run one fuzzer twice at different revisions; see below)
 - fuzzer versions (`foundry_git_repo`/`foundry_git_ref`, `echidna_version`, `medusa_version`, `recon_version`)
 - opt-in tool builds (`echidna_ci_*`, `medusa_git_*`, `medusa_go_*`; see below)
 - `git_token_ssm_parameter_name` (for private repos)
@@ -20,6 +21,36 @@ Set inputs via `-var`/`tfvars` (`TF_VAR_*` also works):
 Per-fuzzer environment variables are documented in `fuzzers/README.md`.
 The combined UTF-8 byte length of caller-supplied `fuzzer_env` keys and values
 is limited to 4096 bytes so EC2 bootstrap data stays within the API limit.
+
+## Compare Two Revisions Of One Fuzzer
+
+A *variant* runs a built-in fuzzer's bundled scripts a second time under its own
+key, with its own pinned version. That is how one benchmark compares two
+revisions of the same fuzzer side by side:
+
+```bash
+export TF_VAR_fuzzers='["echidna","echidna-2-2-6","medusa"]'
+export TF_VAR_fuzzer_variants='[{"key":"echidna-2-2-6","base":"echidna","version":"2.2.6"}]'
+```
+
+Rules:
+
+- `base` must be a built-in fuzzer (`echidna`, `foundry`, `medusa`, `recon-fuzzer`).
+- `key` must start with `<base>-`, so runners and the analysis scripts can still
+  tell which fuzzer produced a run.
+- Every variant key must also appear in `fuzzers`, or it is not scheduled.
+- `version` pins the variant's release of its base fuzzer. Versions are never
+  accepted through `env`, so the revision is recorded in the benchmark manifest.
+- `env` accepts the same keys as `fuzzer_env` and is merged over it.
+
+Through the GitHub workflows the same request is `fuzzer_variants` in the issue
+JSON (`fuzzer_variants_json` for `workflow_dispatch`).
+
+Each variant is labelled by its key, so its artifacts and its charted series
+stay separate from the base fuzzer's. Analysis names a series after the fuzzer
+(`echidna`) unless that fuzzer ran under more than one label, in which case each
+label becomes its own series (`echidna-v2.3.1`, `echidna-2-2-6`). `RAW_LABELS=1`
+still splits every fuzzer by label.
 
 ## Quick Start
 

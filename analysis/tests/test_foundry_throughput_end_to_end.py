@@ -31,6 +31,10 @@ class FoundryThroughputEndToEndTests(unittest.TestCase):
             common_sh.write_text(
                 textwrap.dedent(
                     """
+                    set_fuzzer_label() {
+                      SCFUZZBENCH_FUZZER_LABEL="${SCFUZZBENCH_FUZZER_LABEL:-$2}"
+                      export SCFUZZBENCH_FUZZER_LABEL
+                    }
                     prepare_workspace() {
                       mkdir -p "${SCFUZZBENCH_WORKDIR}/target" "${SCFUZZBENCH_LOG_DIR}"
                       SCFUZZBENCH_LOG_ROOT_ANCHOR="${SCFUZZBENCH_LOG_DIR}"

@@ -23,6 +23,14 @@ from typing import Any, Iterable, Optional, Sequence
 
 from Crypto.Hash import keccak
 
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from analysis.analyze import build_series_map, series_for_label  # noqa: E402
+
 
 SCHEMA_VERSION = 1
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
@@ -905,11 +913,18 @@ def analyze_selector_artifacts(
     corpus_paths = _discover_instance_paths(corpus_dir)
     log_paths = _discover_instance_paths(logs_dir)
     labels = sorted(set(corpus_paths) | set(log_paths))
+    kept_labels = [
+        split_instance_label(label)[1]
+        for label in labels
+        if normalize_fuzzer(split_instance_label(label)[1]).lower() not in exclude
+        and split_instance_label(label)[1].lower() not in exclude
+    ]
+    series_map = build_series_map(kept_labels, raw_labels=raw_labels)
     instances: list[InstanceResult] = []
     for label in labels:
         instance_id, fuzzer_label = split_instance_label(label)
         engine = normalize_fuzzer(fuzzer_label)
-        fuzzer = fuzzer_label if raw_labels else engine
+        fuzzer = series_for_label(fuzzer_label, series_map)
         if engine.lower() in exclude or fuzzer_label.lower() in exclude:
             continue
         result = InstanceResult(

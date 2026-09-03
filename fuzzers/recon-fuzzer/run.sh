@@ -8,8 +8,7 @@ export PATH="/root/.foundry/bin:${PATH}"
 
 require_env RECON_VERSION
 recon_version="${RECON_VERSION#v}"
-SCFUZZBENCH_FUZZER_LABEL="recon-v${recon_version}"
-export SCFUZZBENCH_FUZZER_LABEL
+set_fuzzer_label "recon-fuzzer" "recon-v${recon_version}"
 
 clone_target
 capture_target_workspace_anchor

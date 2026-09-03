@@ -13,6 +13,10 @@ def write_common_sh(tmp_dir: Path) -> Path:
     common_sh = tmp_dir / "common.sh"
     common_sh.write_text(
         """
+set_fuzzer_label() {
+  SCFUZZBENCH_FUZZER_LABEL="${SCFUZZBENCH_FUZZER_LABEL:-$2}"
+  export SCFUZZBENCH_FUZZER_LABEL
+}
 prepare_workspace() { mkdir -p "${SCFUZZBENCH_WORKDIR}/target" "${SCFUZZBENCH_LOG_DIR}"; }
 register_shutdown_trap() { prepare_workspace; }
 resolve_target_corpus_dir() {

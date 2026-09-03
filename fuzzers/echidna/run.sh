@@ -20,12 +20,12 @@ if [[ -n "${ECHIDNA_CI_REPO:-}" ]]; then
     log "Invalid resolved Echidna CI commit provenance"
     exit 1
   fi
-  SCFUZZBENCH_FUZZER_LABEL="echidna-ci-${echidna_ci_commit:0:12}"
+  default_fuzzer_label="echidna-ci-${echidna_ci_commit:0:12}"
 else
   require_env ECHIDNA_VERSION
-  SCFUZZBENCH_FUZZER_LABEL="echidna-v${ECHIDNA_VERSION}"
+  default_fuzzer_label="echidna-v${ECHIDNA_VERSION}"
 fi
-export SCFUZZBENCH_FUZZER_LABEL
+set_fuzzer_label "echidna" "${default_fuzzer_label}"
 
 clone_target
 capture_target_workspace_anchor

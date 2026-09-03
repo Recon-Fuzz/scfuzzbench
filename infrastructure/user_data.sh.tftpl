@@ -49,6 +49,8 @@ decode_b64_env() {
 }
 
 decode_b64_into fuzzer_key '${fuzzer_key_b64}'
+# A fuzzer variant runs its base fuzzer's bundled scripts under its own key.
+decode_b64_into fuzzer_script_key '${fuzzer_script_key_b64}'
 decode_b64_into bootstrap_repository '${scfuzzbench_repository_b64}'
 decode_b64_into bootstrap_commit '${scfuzzbench_commit_b64}'
 decode_b64_into bootstrap_manifest_sha256 '${bootstrap_manifest_sha256_b64}'
@@ -56,6 +58,15 @@ decode_b64_into bootstrap_installer_sha256 '${bootstrap_installer_sha256_b64}'
 
 if [[ ! "$${fuzzer_key}" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
   echo "Invalid fuzzer key in bootstrap configuration" >&2
+  exit 1
+fi
+if [[ ! "$${fuzzer_script_key}" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
+  echo "Invalid fuzzer script key in bootstrap configuration" >&2
+  exit 1
+fi
+if [[ "$${fuzzer_key}" != "$${fuzzer_script_key}" \
+  && "$${fuzzer_key}" != "$${fuzzer_script_key}-"* ]]; then
+  echo "Fuzzer variant key must start with its base fuzzer key" >&2
   exit 1
 fi
 if [[ "$${bootstrap_repository}" != "https://github.com/scfuzzbench/scfuzzbench" ]]; then
@@ -215,7 +226,7 @@ upload_bootstrap_log() {
 }
 trap 'upload_bootstrap_log; shutdown_instance' EXIT
 
-bash "/opt/scfuzzbench/fuzzers/$${fuzzer_key}/install.sh"
+bash "/opt/scfuzzbench/fuzzers/$${fuzzer_script_key}/install.sh"
 
 # Upload the bootstrap log once right after a successful install: the EXIT-trap
 # upload below can race the instance poweroff started by run.sh's own shutdown
@@ -223,7 +234,7 @@ bash "/opt/scfuzzbench/fuzzers/$${fuzzer_key}/install.sh"
 # run.sh. Runs in a subshell so the function's set +e does not leak here.
 ( upload_bootstrap_log )
 
-bash "/opt/scfuzzbench/fuzzers/$${fuzzer_key}/run.sh" || true
+bash "/opt/scfuzzbench/fuzzers/$${fuzzer_script_key}/run.sh" || true
 
 printf '' |
   write_strict_descendant_file \
