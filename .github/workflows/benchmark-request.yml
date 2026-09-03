@@ -437,7 +437,7 @@ jobs:
                   continue;
                 }
                 const unknownFields = Object.keys(variant).filter(
-                  (field) => !["key", "base", "version", "ci", "env"].includes(field)
+                  (field) => !["key", "base", "version", "ci", "source", "env"].includes(field)
                 );
                 if (unknownFields.length > 0) {
                   errors.push(`fuzzer variant has unsupported field(s): ${unknownFields.join(", ")}`);
@@ -537,6 +537,57 @@ jobs:
                   };
                 }
 
+                // Medusa's bleeding-edge path is a git source build.
+                const sourceRaw = variant["source"] === undefined || variant["source"] === null
+                  ? null
+                  : variant["source"];
+                let source = null;
+                if (sourceRaw !== null) {
+                  if (typeof sourceRaw !== "object" || Array.isArray(sourceRaw)) {
+                    errors.push(`Fuzzer variant source for ${key} must be a JSON object`);
+                    continue;
+                  }
+                  if (base !== "medusa") {
+                    errors.push(`Fuzzer variant ${key} may pin a source build only for medusa`);
+                    continue;
+                  }
+                  if (version || ci) {
+                    errors.push(
+                      `Fuzzer variant ${key} cannot combine a source build with a version or a CI build`
+                    );
+                    continue;
+                  }
+                  const sourceFields = ["git_ref", "git_commit"];
+                  const unknownSource = Object.keys(sourceRaw).filter(
+                    (field) => !sourceFields.includes(field)
+                  );
+                  if (unknownSource.length > 0) {
+                    errors.push(`Fuzzer variant ${key} source has unsupported field(s): ${unknownSource.join(", ")}`);
+                    continue;
+                  }
+                  const missingSource = sourceFields.filter(
+                    (field) => typeof sourceRaw[field] !== "string" || !sourceRaw[field].trim()
+                  );
+                  if (missingSource.length > 0) {
+                    errors.push(
+                      `Fuzzer variant ${key} source requires git_ref and git_commit together; ` +
+                        `missing: ${missingSource.join(", ")}`
+                    );
+                    continue;
+                  }
+                  const gitRef = sourceRaw.git_ref.trim();
+                  const gitCommit = sourceRaw.git_commit.trim();
+                  if (!/^[A-Za-z0-9._/-]+$/.test(gitRef)) {
+                    errors.push(`Fuzzer variant ${key} source git_ref contains unsupported characters`);
+                    continue;
+                  }
+                  if (!/^[A-Fa-f0-9]{40}$/.test(gitCommit)) {
+                    errors.push(`Fuzzer variant ${key} source git_commit must be a full 40-character SHA`);
+                    continue;
+                  }
+                  source = { git_ref: gitRef, git_commit: gitCommit.toLowerCase() };
+                }
+
                 const variantEnvRaw = variant["env"] === undefined || variant["env"] === null
                   ? {}
                   : variant["env"];
@@ -556,6 +607,7 @@ jobs:
                   base,
                   version,
                   ...(ci ? { ci } : {}),
+                  ...(source ? { source } : {}),
                   env: variantEnv.value ? JSON.parse(variantEnv.value) : {},
                 });
               }
@@ -810,6 +862,28 @@ jobs:
             const medusaSourceCount = medusaSourceFields.filter((field) => field.ok && field.value).length;
             if (medusaSourceCount !== 0 && medusaSourceCount !== medusaSourceFields.length) {
               errors.push("Medusa source mode requires medusa_git_repo, medusa_git_ref, and medusa_git_commit together");
+            }
+            const variantSourceKeys = sanitizedVariants
+              .filter((variant) => variant.source)
+              .map((variant) => variant.key);
+            if (variantSourceKeys.length > 0 && medusaSourceCount !== medusaSourceFields.length) {
+              errors.push(
+                "Fuzzer variant source builds require the run-level Medusa source inputs: " +
+                  variantSourceKeys.join(", ")
+              );
+            }
+            if (
+              variantSourceKeys.length > 0 &&
+              medusa_git_commit.ok &&
+              sanitizedVariants.some(
+                (variant) =>
+                  variant.source &&
+                  variant.source.git_commit === medusa_git_commit.value.toLowerCase()
+              )
+            ) {
+              errors.push(
+                "A fuzzer variant source build must differ from the run-level Medusa commit"
+              );
             }
             if (medusaSourceCount === medusaSourceFields.length) {
               if (medusa_version.ok && medusa_version.value) {

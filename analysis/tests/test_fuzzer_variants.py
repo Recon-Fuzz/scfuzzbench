@@ -201,6 +201,7 @@ class VariantRequestValidationTests(unittest.TestCase):
                     "base": "echidna",
                     "version": "2.2.6",
                     "ci": {},
+                    "source": {},
                     "env": {},
                 }
             ],
@@ -363,6 +364,107 @@ class VariantCiBuildTests(unittest.TestCase):
         self.assertEqual([item["key"] for item in selected], ["echidna-pr-1614"])
         with self.assertRaises(module.ValidationError):
             module.parse_variant_ci(json.dumps([{"key": "x", "ci": {"run_id": "1"}}]))
+
+
+class VariantSourceBuildTests(unittest.TestCase):
+    """A medusa variant can pin its own source build, for master-vs-PR runs."""
+
+    SOURCE = {
+        "git_ref": "v1.4.1",
+        "git_commit": "3857153837ab90ed73adc484414b4b43703a54fb",
+    }
+
+    def test_accepts_a_source_build_and_normalizes_case(self):
+        [variant] = validate_fuzzer_variants(
+            [
+                {
+                    "key": "medusa-v1-4-1",
+                    "base": "medusa",
+                    "source": dict(
+                        self.SOURCE, git_commit=self.SOURCE["git_commit"].upper()
+                    ),
+                }
+            ]
+        )
+
+        self.assertEqual(variant["source"], self.SOURCE)
+        self.assertEqual(variant["version"], "")
+
+    def test_source_builds_are_medusa_only(self):
+        with self.assertRaisesRegex(ValueError, "only for medusa"):
+            validate_fuzzer_variants(
+                [{"key": "echidna-x", "base": "echidna", "source": self.SOURCE}]
+            )
+
+    def test_a_variant_pins_one_kind_of_build(self):
+        with self.assertRaisesRegex(ValueError, "both a version and a source build"):
+            validate_fuzzer_variants(
+                [
+                    {
+                        "key": "medusa-x",
+                        "base": "medusa",
+                        "version": "1.4.1",
+                        "source": self.SOURCE,
+                    }
+                ]
+            )
+
+    def test_partial_source_inputs_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "missing: git_commit"):
+            validate_fuzzer_variants(
+                [{"key": "medusa-x", "base": "medusa", "source": {"git_ref": "master"}}]
+            )
+
+    def test_commit_must_be_a_full_sha(self):
+        with self.assertRaisesRegex(ValueError, "40-character SHA"):
+            validate_fuzzer_variants(
+                [
+                    {
+                        "key": "medusa-x",
+                        "base": "medusa",
+                        "source": dict(self.SOURCE, git_commit="v1.4.1"),
+                    }
+                ]
+            )
+
+    def test_preflight_verifies_every_variant_source(self):
+        import importlib.util
+
+        script = REPO_ROOT / "scripts" / "validate_bleeding_edge_tools.py"
+        spec = importlib.util.spec_from_file_location("preflight_source", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        selected = module.parse_variant_source(
+            json.dumps(
+                [
+                    {"key": "medusa-v1-4-1", "base": "medusa", "source": self.SOURCE},
+                    {"key": "medusa-release", "base": "medusa", "version": "1.4.1"},
+                ]
+            )
+        )
+
+        self.assertEqual([item["key"] for item in selected], ["medusa-v1-4-1"])
+        with self.assertRaises(module.ValidationError):
+            module.parse_variant_source(
+                json.dumps([{"key": "x", "source": {"git_ref": "master"}}])
+            )
+
+    def test_each_instance_resolves_its_own_medusa_source(self):
+        main = (REPO_ROOT / "infrastructure" / "main.tf").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "git_ref    = local.variant_source_by_key[instance.fuzzer.key].git_ref",
+            main,
+        )
+        self.assertIn(
+            "git_commit = local.variant_source_by_key[instance.fuzzer.key].git_commit",
+            main,
+        )
+        self.assertIn(
+            "length(local.variant_source_keys) == 0 || local.medusa_source_enabled",
+            main,
+        )
 
 
 class VariantProvisioningContractTests(unittest.TestCase):

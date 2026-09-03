@@ -610,7 +610,9 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
     for entry in value:
         if not isinstance(entry, dict):
             raise ValueError("each fuzzer variant must be a JSON object")
-        unknown_fields = sorted(set(entry) - {"key", "base", "version", "ci", "env"})
+        unknown_fields = sorted(
+            set(entry) - {"key", "base", "version", "ci", "source", "env"}
+        )
         if unknown_fields:
             raise ValueError(
                 f"fuzzer variant has unsupported field(s): {', '.join(unknown_fields)}"
@@ -641,6 +643,21 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
                     f"fuzzer variant {key!r} may pin a CI build only for echidna"
                 )
             ci = validate_variant_ci(key, ci)
+        # Medusa's bleeding-edge path is a git source build rather than a CI
+        # artifact, so it gets its own block with the same rules.
+        source = entry.get("source", {})
+        if source is None:
+            source = {}
+        if source:
+            if base != "medusa":
+                raise ValueError(
+                    f"fuzzer variant {key!r} may pin a source build only for medusa"
+                )
+            if ci:
+                raise ValueError(
+                    f"fuzzer variant {key!r} cannot pin both a CI build and a source build"
+                )
+            source = validate_variant_source(key, source)
         # A variant pins its revision through this field: tool versions are
         # never accepted as environment overrides.
         version = entry.get("version", "")
@@ -655,16 +672,50 @@ def validate_fuzzer_variants(value: Any) -> list[dict[str, Any]]:
             raise ValueError(
                 f"fuzzer variant {key!r} cannot pin both a version and a CI build"
             )
+        if source and version:
+            raise ValueError(
+                f"fuzzer variant {key!r} cannot pin both a version and a source build"
+            )
         variants.append(
             {
                 "key": key,
                 "base": base,
                 "version": version,
                 "ci": ci,
+                "source": source,
                 "env": validate_fuzzer_env_map(env),
             }
         )
     return variants
+
+
+def validate_variant_source(key: str, value: Any) -> dict[str, str]:
+    """Validate one variant's Medusa source-build override."""
+    if not isinstance(value, dict):
+        raise ValueError(f"fuzzer variant {key!r} source must be a JSON object")
+    required = ("git_ref", "git_commit")
+    unknown = sorted(set(value) - set(required))
+    if unknown:
+        raise ValueError(
+            f"fuzzer variant {key!r} source has unsupported field(s): {', '.join(unknown)}"
+        )
+    missing = [field for field in required if not str(value.get(field, "") or "").strip()]
+    if missing:
+        raise ValueError(
+            f"fuzzer variant {key!r} source requires git ref and full commit "
+            f"together; missing: {', '.join(missing)}"
+        )
+    source = {field: str(value[field]).strip() for field in required}
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", source["git_ref"]):
+        raise ValueError(
+            f"fuzzer variant {key!r} source git_ref contains unsupported characters"
+        )
+    if not re.fullmatch(r"[A-Fa-f0-9]{40}", source["git_commit"]):
+        raise ValueError(
+            f"fuzzer variant {key!r} source git_commit must be a full 40-character SHA"
+        )
+    source["git_commit"] = source["git_commit"].lower()
+    return source
 
 
 def validate_variant_ci(key: str, value: Any) -> dict[str, str]:
@@ -920,6 +971,25 @@ def validate_benchmark_inputs(values: dict[str, str]) -> dict[str, Any]:
         raise ValueError(
             "Medusa source mode requires git repo, git ref, and full commit together"
         )
+    # A variant source build inherits the repository and Go toolchain pin, so
+    # the run-level Medusa source inputs must be present.
+    variant_source_keys = [variant["key"] for variant in variants if variant["source"]]
+    if variant_source_keys and not medusa_count:
+        raise ValueError(
+            "fuzzer variant source builds require the run-level Medusa source inputs: "
+            + ", ".join(variant_source_keys)
+        )
+    variant_source_commits = {
+        variant["source"]["git_commit"] for variant in variants if variant["source"]
+    }
+    if (
+        variant_source_commits
+        and medusa_source["MEDUSA_GIT_COMMIT"].lower() in variant_source_commits
+    ):
+        raise ValueError(
+            "a fuzzer variant source build must differ from the run-level Medusa commit"
+        )
+
     medusa_go_version = value("MEDUSA_GO_VERSION") or "1.24.0"
     medusa_go_sha256 = (
         value("MEDUSA_GO_SHA256")

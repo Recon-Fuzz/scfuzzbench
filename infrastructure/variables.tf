@@ -649,6 +649,10 @@ variable "fuzzer_variants" {
       artifact_sha256 = string
       commit          = string
     }))
+    source = optional(object({
+      git_ref    = string
+      git_commit = string
+    }))
     env = optional(map(string), {})
   }))
   description = "Extra runs of a built-in fuzzer under a new key with its own env, so one benchmark can compare two revisions of the same fuzzer."
@@ -729,6 +733,29 @@ variable "fuzzer_variants" {
       )
     ])
     error_message = "fuzzer_variants ci requires a positive run_id, a Linux artifact_name, a SHA-256 artifact_sha256, and a full commit."
+  }
+
+  # Medusa's bleeding-edge path is a git source build, so it gets its own
+  # block under the same rules as ci.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.source == null ? true : (
+        variant.base == "medusa" && variant.version == "" && variant.ci == null
+      )
+    ])
+    error_message = "fuzzer_variants source is medusa-only and cannot be combined with version or ci."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.source == null ? true : (
+        can(regex("^[A-Za-z0-9._/-]+$", variant.source.git_ref)) &&
+        can(regex("^[A-Fa-f0-9]{40}$", variant.source.git_commit))
+      )
+    ])
+    error_message = "fuzzer_variants source requires a git_ref without spaces and a full git_commit."
   }
 
   validation {

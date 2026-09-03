@@ -150,6 +150,10 @@ locals {
           artifact_sha256 = lower(variant.ci.artifact_sha256)
           commit          = lower(variant.ci.commit)
         }
+        source = variant.source == null ? null : {
+          git_ref    = variant.source.git_ref
+          git_commit = lower(variant.source.git_commit)
+        }
       }
     ]
     } : {}, var.shared_seed_corpus_source != "" ? {
@@ -334,6 +338,10 @@ locals {
       })
     )
   }
+  variant_source_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => variant.source if variant.source != null
+  }
   instance_medusa_source = {
     for instance_key, instance in local.instance_map : instance_key => (
       instance.fuzzer.base != "medusa" ||
@@ -341,6 +349,11 @@ locals {
         git_repo   = ""
         git_ref    = ""
         git_commit = ""
+        } : contains(keys(local.variant_source_by_key), instance.fuzzer.key) ? {
+        # A variant source build reuses the run-level repository and Go pin.
+        git_repo   = var.medusa_git_repo
+        git_ref    = local.variant_source_by_key[instance.fuzzer.key].git_ref
+        git_commit = local.variant_source_by_key[instance.fuzzer.key].git_commit
         } : {
         git_repo   = var.medusa_git_repo
         git_ref    = var.medusa_git_ref
@@ -348,7 +361,8 @@ locals {
       }
     )
   }
-  variant_ci_keys = sort(keys(local.variant_ci_by_key))
+  variant_ci_keys     = sort(keys(local.variant_ci_by_key))
+  variant_source_keys = sort(keys(local.variant_source_by_key))
 
   # Install-mode wiring follows the base fuzzer, so an Echidna variant still
   # gets Echidna's CI-artifact inputs.
@@ -907,6 +921,11 @@ resource "aws_instance" "fuzzer" {
     precondition {
       condition     = length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled
       error_message = "Fuzzer variant CI builds require the run-level Echidna CI inputs: ${join(", ", local.variant_ci_keys)}."
+    }
+
+    precondition {
+      condition     = length(local.variant_source_keys) == 0 || local.medusa_source_enabled
+      error_message = "Fuzzer variant source builds require the run-level Medusa source inputs: ${join(", ", local.variant_source_keys)}."
     }
 
     precondition {

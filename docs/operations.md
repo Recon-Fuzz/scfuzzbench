@@ -47,9 +47,22 @@ Rules:
   PR). It takes `run_id`, `artifact_name`, `artifact_sha256` and `commit`; the
   repository and token parameter are inherited from the run-level
   `echidna_ci_*` inputs, so the instance role still reads one SSM parameter.
-  A variant pins either `version` or `ci`, never both, and every variant build
-  is verified against the Actions API in the same preflight as the run-level
-  one.
+- `source` is the Medusa equivalent: `git_ref` and `git_commit`, with the
+  repository and Go toolchain pin inherited from the run-level `medusa_git_*`
+  inputs, so two Medusa commits can be compared in one run.
+
+A variant pins exactly one of `version`, `ci` or `source`. A variant that pins
+a `version` opts out of the run-level bleeding-edge build, so a CI or source
+build can be compared against a published release. Every variant build is
+verified against the upstream API in the same preflight as the run-level one,
+and must differ from the run-level commit.
+
+Comparing two Medusa commits in a single run:
+
+```bash
+export TF_VAR_fuzzers='["medusa","medusa-v1-4-1"]'
+export TF_VAR_fuzzer_variants='[{"key":"medusa-v1-4-1","base":"medusa","source":{"git_ref":"v1.4.1","git_commit":"3857153837ab90ed73adc484414b4b43703a54fb"}}]'
+```
 
 Comparing master against a PR build in a single run:
 
