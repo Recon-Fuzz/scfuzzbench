@@ -848,7 +848,8 @@ class BenchmarkRunStateTests(unittest.TestCase):
         self.assertIn("cannot contain CR, LF, double quotes", terraform)
         self.assertIn("fuzzer_env_b64", infrastructure)
         self.assertIn(
-            "for key, value in local.merged_fuzzer_env : key => base64encode(value)",
+            "for key, value in local.fuzzer_env_by_key[instance.fuzzer.key] : "
+            "key => base64encode(value)",
             infrastructure,
         )
         self.assertIn("base64encode(var.target_repo_url)", infrastructure)

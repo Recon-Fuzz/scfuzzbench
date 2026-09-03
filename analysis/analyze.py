@@ -3116,6 +3116,55 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_series_map(
+    fuzzer_labels: Iterable[str], *, raw_labels: bool = False
+) -> Dict[str, str]:
+    """Map each fuzzer label to the series name used for grouping and plots.
+
+    A benchmark can run the same fuzzer twice (two revisions, via fuzzer
+    variants), which share a normalized fuzzer name but not a label. Those are
+    split per label so their results are never averaged together; every other
+    fuzzer keeps its plain name. `raw_labels` splits all of them.
+    """
+    labels = {str(label).strip() for label in fuzzer_labels if str(label).strip()}
+    if raw_labels:
+        return {label: label for label in labels}
+    labels_by_fuzzer: Dict[str, set] = defaultdict(set)
+    for label in labels:
+        labels_by_fuzzer[normalize_fuzzer(label)].add(label)
+    return {
+        label: (
+            label
+            if len(labels_by_fuzzer[normalize_fuzzer(label)]) > 1
+            else normalize_fuzzer(label)
+        )
+        for label in labels
+    }
+
+
+def series_for_label(fuzzer_label: str, series_map: Dict[str, str]) -> str:
+    return series_map.get(fuzzer_label) or normalize_fuzzer(fuzzer_label)
+
+
+def apply_series_map(records: Iterable[Any], series_map: Dict[str, str]) -> List[Any]:
+    """Rewrite the `fuzzer` field of parsed records to their series name."""
+    return [
+        replace(record, fuzzer=series_for_label(record.fuzzer_label, series_map))
+        for record in records
+    ]
+
+
+def instance_labels_from_logs(logs_dir: Optional[Path]) -> List[str]:
+    """Instance directory names in a prepared logs dir."""
+    if logs_dir is None or not logs_dir.exists():
+        return []
+    return [path.name for path in sorted(logs_dir.iterdir()) if path.is_dir()]
+
+
+def fuzzer_labels_from_logs(logs_dir: Optional[Path]) -> List[str]:
+    return [split_instance_label(name)[1] for name in instance_labels_from_logs(logs_dir)]
+
+
 def _apply_raw_labels_events(events: List[Event]) -> List[Event]:
     """Replace normalized fuzzer with the raw fuzzer_label."""
     return [replace(e, fuzzer=e.fuzzer_label) for e in events]
@@ -3139,8 +3188,12 @@ def main() -> int:
     if args.command == "parse":
         log_files = discover_log_files(args.logs_dir)
         events = parse_logs(args.logs_dir, args.run_id, log_files)
-        if raw_labels:
-            events = _apply_raw_labels_events(events)
+        series_map = build_series_map(
+            fuzzer_labels_from_logs(args.logs_dir)
+            + [event.fuzzer_label for event in events],
+            raw_labels=raw_labels,
+        )
+        events = apply_series_map(events, series_map)
         write_events_csv(events, args.out_csv)
         return 0
     if args.command == "run":
@@ -3156,12 +3209,17 @@ def main() -> int:
             log_files,
             include_coverage=args.coverage_over_time,
         )
-        if raw_labels:
-            events = _apply_raw_labels_events(events)
-            throughput_samples = _apply_raw_labels_throughput(throughput_samples)
-            progress_metrics_samples = _apply_raw_labels_progress(
-                progress_metrics_samples
-            )
+        series_map = build_series_map(
+            fuzzer_labels_from_logs(args.logs_dir)
+            + [
+                record.fuzzer_label
+                for record in (*events, *throughput_samples, *progress_metrics_samples)
+            ],
+            raw_labels=raw_labels,
+        )
+        events = apply_series_map(events, series_map)
+        throughput_samples = apply_series_map(throughput_samples, series_map)
+        progress_metrics_samples = apply_series_map(progress_metrics_samples, series_map)
         events_csv = out_dir / "events.csv"
         summary_csv = out_dir / "summary.csv"
         overlap_csv = out_dir / "overlap.csv"

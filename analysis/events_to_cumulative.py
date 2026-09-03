@@ -2,8 +2,15 @@
 import argparse
 import csv
 import re
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from analysis.analyze import build_series_map, series_for_label  # noqa: E402
 
 
 REQUIRED_EVENT_COLS = {
@@ -78,7 +85,7 @@ def inventory_runs_from_logs(
         if exclude_fuzzers:
             if str(fuzzer).lower() in exclude_fuzzers or fuzzer_label.lower() in exclude_fuzzers:
                 continue
-        runs.append((fuzzer, f"{run_id_value}:{instance_id}"))
+        runs.append((fuzzer_label, f"{run_id_value}:{instance_id}"))
     return runs
 
 
@@ -91,17 +98,17 @@ def build_cumulative_rows(
     exclude_fuzzers: Optional[set[str]] = None,
     raw_labels: bool = False,
 ) -> List[Tuple[str, str, float, int]]:
-    grouped: dict[Tuple[str, str], List[float]] = {}
+    inventory: List[Tuple[str, str]] = []
     if logs_dir is not None:
-        for fuzzer, run_key in inventory_runs_from_logs(
+        inventory = inventory_runs_from_logs(
             logs_dir=logs_dir, run_id=run_id, exclude_fuzzers=exclude_fuzzers,
             raw_labels=raw_labels,
-        ):
-            grouped.setdefault((fuzzer, run_key), [])
+        )
 
+    kept_events: List[Tuple[str, str, float]] = []
     for event in events:
         fuzzer = str(event["fuzzer"])
-        fuzzer_label = str(event.get("fuzzer_label", ""))
+        fuzzer_label = str(event.get("fuzzer_label", "")) or fuzzer
         if exclude_fuzzers and (fuzzer.lower() in exclude_fuzzers or fuzzer_label.lower() in exclude_fuzzers):
             continue
         run_id_value = run_id or str(event["run_id"])
@@ -110,7 +117,22 @@ def build_cumulative_rows(
             elapsed = float(event["elapsed_seconds"])
         except (TypeError, ValueError):
             continue
-        grouped.setdefault((fuzzer, run_key), []).append(elapsed)
+        kept_events.append((fuzzer_label, run_key, elapsed))
+
+    # Series names come from labels only, so a run with no events lands in the
+    # same series as the fuzzer revision it came from.
+    series_map = build_series_map(
+        [label for label, _ in inventory] + [label for label, _, _ in kept_events],
+        raw_labels=raw_labels,
+    )
+
+    grouped: dict[Tuple[str, str], List[float]] = {}
+    for fuzzer_label, run_key in inventory:
+        grouped.setdefault((series_for_label(fuzzer_label, series_map), run_key), [])
+    for fuzzer_label, run_key, elapsed in kept_events:
+        grouped.setdefault(
+            (series_for_label(fuzzer_label, series_map), run_key), []
+        ).append(elapsed)
 
     rows: List[Tuple[str, str, float, int]] = []
     for (fuzzer, run_key), times in sorted(grouped.items()):

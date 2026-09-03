@@ -40,6 +40,10 @@ on:
         description: "JSON list of fuzzer keys to run (optional)."
         required: false
         default: '["echidna","medusa","foundry","recon-fuzzer"]'
+      fuzzer_variants_json:
+        description: "JSON list of fuzzer variants, e.g. [{\"key\":\"echidna-2-2-6\",\"base\":\"echidna\",\"version\":\"2.2.6\"}] (optional)."
+        required: false
+        default: ""
       foundry_git_repo:
         description: "Optional Foundry git repo override (build from source; defaults to upstream foundry-rs/foundry via Terraform)."
         required: false
@@ -129,6 +133,11 @@ on:
         required: false
         type: string
         default: '["echidna","medusa","foundry","recon-fuzzer"]'
+      fuzzer_variants_json:
+        description: "JSON list of fuzzer variants (one fuzzer, another revision) (optional)."
+        required: false
+        type: string
+        default: ""
       foundry_git_repo:
         description: "Optional Foundry git repo override (build from source; defaults to upstream foundry-rs/foundry via Terraform)."
         required: false
@@ -374,6 +383,7 @@ jobs:
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           PRELIMINARY_INTERVAL_MINUTES: ${{ inputs.preliminary_interval_minutes }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          FUZZER_VARIANTS_JSON: ${{ inputs.fuzzer_variants_json }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           ECHIDNA_VERSION: ${{ steps.resolve_versions.outputs.echidna_version }}
@@ -491,6 +501,7 @@ jobs:
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          FUZZER_VARIANTS_JSON: ${{ inputs.fuzzer_variants_json }}
           GIT_TOKEN_SSM_PARAMETER_NAME: ${{ inputs.git_token_ssm_parameter_name }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCES_PER_FUZZER: ${{ inputs.instances_per_fuzzer }}
@@ -520,6 +531,9 @@ jobs:
 
           fuzzers_raw = os.environ.get("FUZZERS_JSON", "").strip()
           fuzzers = json.loads(fuzzers_raw or '["echidna","medusa","foundry","recon-fuzzer"]')
+          fuzzer_variants = json.loads(
+              os.environ.get("FUZZER_VARIANTS_JSON", "").strip() or "[]"
+          )
           started = int(os.environ["RUN_STARTED_AT_EPOCH"])
           timeout_hours = float(os.environ["TIMEOUT_HOURS"])
           preliminary_interval_seconds = int(
@@ -540,6 +554,7 @@ jobs:
               "timeout_hours": timeout_hours,
               "preliminary_interval_seconds": preliminary_interval_seconds,
               "fuzzers": fuzzers,
+              "fuzzer_variants": fuzzer_variants,
               "shared_seed_corpus_source": os.environ["SHARED_SEED_CORPUS_SOURCE"],
               "scfuzzbench_commit": os.environ["GITHUB_SHA"],
               "benchmark_uuid": "",
@@ -565,6 +580,12 @@ jobs:
               "timeout_hours": timeout_hours,
               "preliminary_interval_seconds": preliminary_interval_seconds,
               "fuzzers": fuzzers,
+              # Destroy only needs the instance set, and variant env values are
+              # treated like fuzzer_env: never persisted.
+              "fuzzer_variants": [
+                  {"key": variant["key"], "base": variant["base"]}
+                  for variant in fuzzer_variants
+              ],
               "run_id": os.environ["RUN_ID"],
               "run_started_at_epoch": started,
               "terraform_backend_key": os.environ["TERRAFORM_BACKEND_KEY"],
@@ -819,6 +840,7 @@ jobs:
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           PRELIMINARY_INTERVAL_MINUTES: ${{ inputs.preliminary_interval_minutes }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          FUZZER_VARIANTS_JSON: ${{ inputs.fuzzer_variants_json }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           ECHIDNA_VERSION: ${{ needs.prepare-run.outputs.echidna_version }}
@@ -1116,6 +1138,7 @@ jobs:
           TIMEOUT_HOURS: ${{ inputs.timeout_hours }}
           PRELIMINARY_INTERVAL_MINUTES: ${{ inputs.preliminary_interval_minutes }}
           FUZZERS_JSON: ${{ inputs.fuzzers_json }}
+          FUZZER_VARIANTS_JSON: ${{ inputs.fuzzer_variants_json }}
           FOUNDRY_GIT_REPO: ${{ inputs.foundry_git_repo }}
           FOUNDRY_GIT_REF: ${{ inputs.foundry_git_ref }}
           ECHIDNA_VERSION: ${{ needs.prepare-run.outputs.echidna_version }}
@@ -1162,6 +1185,7 @@ jobs:
             -var "timeout_hours=${TIMEOUT_HOURS}"
             -var "preliminary_interval_seconds=${preliminary_interval_seconds}"
             -var "fuzzers=${fuzzers}"
+            -var "fuzzer_variants=${FUZZER_VARIANTS_JSON:-[]}"
             -var "run_id=${RUN_ID}"
             -var "run_started_at_epoch=${RUN_STARTED_AT_EPOCH}"
             -var "terraform_backend_key=${TERRAFORM_BACKEND_KEY}"

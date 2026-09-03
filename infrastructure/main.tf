@@ -136,7 +136,17 @@ locals {
     recon_version                = var.recon_version
     properties_path              = var.properties_path
     fuzzer_keys                  = sort([for fuzzer in local.fuzzer_definitions : fuzzer.key])
-    }, var.shared_seed_corpus_source != "" ? {
+    }, length(local.selected_variants) > 0 ? {
+    # The manifest is public: publish only variant identity and revision, the
+    # same way fuzzer_env values are never declassified.
+    fuzzer_variants = [
+      for variant in local.selected_variants : {
+        key     = variant.key
+        base    = variant.base
+        version = variant.version
+      }
+    ]
+    } : {}, var.shared_seed_corpus_source != "" ? {
     seed_corpus = {
       source         = local.seed_corpus_provenance_source
       source_type    = local.seed_corpus_source_type
@@ -187,40 +197,116 @@ locals {
   base_fuzzer_definitions = [
     {
       key          = "echidna"
+      base         = "echidna"
       install_path = "fuzzers/echidna/install.sh"
       run_path     = "fuzzers/echidna/run.sh"
     },
     {
       key          = "medusa"
+      base         = "medusa"
       install_path = "fuzzers/medusa/install.sh"
       run_path     = "fuzzers/medusa/run.sh"
     },
     {
       key          = "foundry"
+      base         = "foundry"
       install_path = "fuzzers/foundry/install.sh"
       run_path     = "fuzzers/foundry/run.sh"
     },
     {
       key          = "recon-fuzzer"
+      base         = "recon-fuzzer"
       install_path = "fuzzers/recon-fuzzer/install.sh"
       run_path     = "fuzzers/recon-fuzzer/run.sh"
     },
   ]
+  custom_fuzzer_definitions = [
+    for fuzzer in var.custom_fuzzer_definitions : {
+      key          = fuzzer.key
+      base         = fuzzer.key
+      install_path = fuzzer.install_path
+      run_path     = fuzzer.run_path
+    }
+  ]
+  # A variant runs a built-in fuzzer's bundled scripts a second time under its
+  # own key, so one benchmark can compare two revisions of the same fuzzer.
+  # Indexing fails at plan time when `base` is not a known fuzzer key.
+  definition_by_key = {
+    for fuzzer in concat(local.base_fuzzer_definitions, local.custom_fuzzer_definitions) :
+    fuzzer.key => fuzzer
+  }
+  variant_definitions = [
+    for variant in var.fuzzer_variants : {
+      key          = variant.key
+      base         = variant.base
+      install_path = local.definition_by_key[variant.base].install_path
+      run_path     = local.definition_by_key[variant.base].run_path
+    }
+  ]
+  all_fuzzer_definitions = concat(
+    local.base_fuzzer_definitions,
+    local.custom_fuzzer_definitions,
+    local.variant_definitions
+  )
   available_fuzzer_keys = [
-    for fuzzer in concat(local.base_fuzzer_definitions, var.custom_fuzzer_definitions) :
+    for fuzzer in local.all_fuzzer_definitions :
     fuzzer.key
   ]
   selected_fuzzer_keys = length(var.fuzzers) > 0 ? toset(var.fuzzers) : toset(local.available_fuzzer_keys)
   fuzzer_definitions = [
-    for fuzzer in concat(local.base_fuzzer_definitions, var.custom_fuzzer_definitions) :
+    for fuzzer in local.all_fuzzer_definitions :
     fuzzer if contains(local.selected_fuzzer_keys, fuzzer.key)
   ]
-  echidna_ci_selected = local.echidna_ci_enabled && contains([
-    for fuzzer in local.fuzzer_definitions : fuzzer.key
-  ], "echidna")
-  medusa_source_selected = local.medusa_source_enabled && contains([
-    for fuzzer in local.fuzzer_definitions : fuzzer.key
-  ], "medusa")
+  selected_variants = [
+    for variant in var.fuzzer_variants :
+    variant if contains(local.selected_fuzzer_keys, variant.key)
+  ]
+  unknown_fuzzer_keys = [
+    for fuzzer in var.fuzzers :
+    fuzzer if !contains(local.available_fuzzer_keys, fuzzer)
+  ]
+  unscheduled_variant_keys = [
+    for variant in var.fuzzer_variants :
+    variant.key if !contains(local.selected_fuzzer_keys, variant.key)
+  ]
+  # Per-key environment: a variant inherits the run's fuzzer_env and overrides
+  # what it needs, typically the version of its base fuzzer.
+  variant_env_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => merge(local.merged_fuzzer_env, variant.env)
+  }
+  fuzzer_env_by_key = {
+    for fuzzer in local.fuzzer_definitions :
+    fuzzer.key => lookup(local.variant_env_by_key, fuzzer.key, local.merged_fuzzer_env)
+  }
+  # A variant pins its own release of its base fuzzer; every other instance
+  # uses the run-level version.
+  variant_version_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => variant.version if variant.version != ""
+  }
+  instance_tool_version = {
+    for instance_key, instance in local.instance_map : instance_key => {
+      for tool, version in {
+        "echidna"      = var.echidna_version
+        "medusa"       = var.medusa_version
+        "foundry"      = local.foundry_release_version
+        "recon-fuzzer" = var.recon_version
+        } : tool => (
+        instance.fuzzer.base == tool
+        ? lookup(local.variant_version_by_key, instance.fuzzer.key, version)
+        : version
+      )
+    }
+  }
+
+  # Install-mode wiring follows the base fuzzer, so an Echidna variant still
+  # gets Echidna's CI-artifact inputs.
+  selected_fuzzer_bases = [for fuzzer in local.fuzzer_definitions : fuzzer.base]
+  echidna_ci_selected   = local.echidna_ci_enabled && contains(local.selected_fuzzer_bases, "echidna")
+  medusa_source_selected = local.medusa_source_enabled && contains(
+    local.selected_fuzzer_bases, "medusa"
+  )
 
   instances = flatten([
     for fuzzer in local.fuzzer_definitions : [
@@ -244,6 +330,7 @@ locals {
         scfuzzbench_repository_b64       = base64encode(var.scfuzzbench_repository)
         scfuzzbench_commit_b64           = base64encode(lower(var.scfuzzbench_commit))
         fuzzer_key_b64                   = base64encode(instance.fuzzer.key)
+        fuzzer_script_key_b64            = base64encode(instance.fuzzer.base)
         aws_region_b64                   = base64encode(var.aws_region)
         s3_bucket_b64                    = base64encode(local.bucket_name)
         run_id_b64                       = base64encode(tostring(local.run_id))
@@ -256,40 +343,40 @@ locals {
         benchmark_type_b64               = base64encode(var.benchmark_type)
         preliminary_interval_seconds_b64 = base64encode(tostring(var.preliminary_interval_seconds))
         run_index_b64                    = base64encode(tostring(instance.run_index))
-        foundry_version_b64              = base64encode(local.foundry_release_version)
+        foundry_version_b64              = base64encode(local.instance_tool_version[instance_key]["foundry"])
         foundry_git_repo_b64             = base64encode(var.foundry_git_repo)
         foundry_git_ref_b64              = base64encode(var.foundry_git_ref)
-        echidna_version_b64              = base64encode(var.echidna_version)
-        echidna_ci_repo_b64              = base64encode(instance.fuzzer.key == "echidna" ? var.echidna_ci_repo : "")
-        echidna_ci_run_id_b64            = base64encode(instance.fuzzer.key == "echidna" ? var.echidna_ci_run_id : "")
-        echidna_ci_artifact_name_b64     = base64encode(instance.fuzzer.key == "echidna" ? var.echidna_ci_artifact_name : "")
-        echidna_ci_artifact_sha256_b64   = base64encode(instance.fuzzer.key == "echidna" ? var.echidna_ci_artifact_sha256 : "")
-        echidna_ci_commit_b64            = base64encode(instance.fuzzer.key == "echidna" ? var.echidna_ci_commit : "")
+        echidna_version_b64              = base64encode(local.instance_tool_version[instance_key]["echidna"])
+        echidna_ci_repo_b64              = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")
+        echidna_ci_run_id_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_run_id : "")
+        echidna_ci_artifact_name_b64     = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_name : "")
+        echidna_ci_artifact_sha256_b64   = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_sha256 : "")
+        echidna_ci_commit_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_commit : "")
         echidna_ci_token_ssm_parameter_name_b64 = base64encode(
-          instance.fuzzer.key == "echidna" ? var.echidna_ci_token_ssm_parameter_name : ""
+          instance.fuzzer.base == "echidna" ? var.echidna_ci_token_ssm_parameter_name : ""
         )
-        medusa_version_b64 = base64encode(var.medusa_version)
+        medusa_version_b64 = base64encode(local.instance_tool_version[instance_key]["medusa"])
         medusa_git_repo_b64 = base64encode(
-          instance.fuzzer.key == "medusa" ? var.medusa_git_repo : ""
+          instance.fuzzer.base == "medusa" ? var.medusa_git_repo : ""
         )
         medusa_git_ref_b64 = base64encode(
-          instance.fuzzer.key == "medusa" ? var.medusa_git_ref : ""
+          instance.fuzzer.base == "medusa" ? var.medusa_git_ref : ""
         )
         medusa_git_commit_b64 = base64encode(
-          instance.fuzzer.key == "medusa" ? var.medusa_git_commit : ""
+          instance.fuzzer.base == "medusa" ? var.medusa_git_commit : ""
         )
         medusa_go_version_b64 = base64encode(
-          instance.fuzzer.key == "medusa" && local.medusa_source_enabled ? var.medusa_go_version : ""
+          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_version : ""
         )
         medusa_go_sha256_b64 = base64encode(
-          instance.fuzzer.key == "medusa" && local.medusa_source_enabled ? var.medusa_go_sha256 : ""
+          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_sha256 : ""
         )
-        recon_version_b64                 = base64encode(var.recon_version)
+        recon_version_b64                 = base64encode(local.instance_tool_version[instance_key]["recon-fuzzer"])
         git_token_ssm_parameter_name_b64  = base64encode(var.git_token_ssm_parameter_name)
         seed_corpus_source_b64            = base64encode(var.shared_seed_corpus_source)
         seed_corpus_provenance_source_b64 = base64encode(local.seed_corpus_provenance_source)
         fuzzer_env_b64 = {
-          for key, value in local.merged_fuzzer_env : key => base64encode(value)
+          for key, value in local.fuzzer_env_by_key[instance.fuzzer.key] : key => base64encode(value)
         }
       }
     )
@@ -708,7 +795,7 @@ resource "aws_instance" "fuzzer" {
   vpc_security_group_ids      = [aws_security_group.ssh.id]
   key_name                    = aws_key_pair.ssh.key_name
   iam_instance_profile = (
-    each.value.fuzzer.key == "echidna" && local.echidna_ci_selected
+    each.value.fuzzer.base == "echidna" && local.echidna_ci_selected
     ? aws_iam_instance_profile.echidna_ci[0].name
     : aws_iam_instance_profile.fuzzer.name
   )
@@ -765,6 +852,16 @@ resource "aws_instance" "fuzzer" {
     precondition {
       condition     = var.echidna_ci_token_kms_key_arn == "" || local.echidna_ci_enabled
       error_message = "echidna_ci_token_kms_key_arn is valid only with Echidna CI artifact mode."
+    }
+
+    precondition {
+      condition     = length(local.unknown_fuzzer_keys) == 0
+      error_message = "fuzzers contains keys that are neither built-in nor declared in fuzzer_variants: ${join(", ", local.unknown_fuzzer_keys)}."
+    }
+
+    precondition {
+      condition     = length(local.unscheduled_variant_keys) == 0
+      error_message = "fuzzers must list every fuzzer_variants key; missing: ${join(", ", local.unscheduled_variant_keys)}."
     }
 
     precondition {

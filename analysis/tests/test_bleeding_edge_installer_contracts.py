@@ -38,6 +38,10 @@ class BleedingEdgeInstallerContractTests(unittest.TestCase):
                 : "${SCFUZZBENCH_ROOT:?}"
                 : "${SCFUZZBENCH_BIN_DIR:?}"
                 : "${SCFUZZBENCH_LOG_DIR:?}"
+                set_fuzzer_label() {
+                  SCFUZZBENCH_FUZZER_LABEL="${SCFUZZBENCH_FUZZER_LABEL:-$2}"
+                  export SCFUZZBENCH_FUZZER_LABEL
+                }
                 prepare_workspace() { mkdir -p "${SCFUZZBENCH_ROOT}" "${SCFUZZBENCH_BIN_DIR}" "${SCFUZZBENCH_LOG_DIR}"; }
                 install_base_packages() { :; }
                 install_foundry() { :; }

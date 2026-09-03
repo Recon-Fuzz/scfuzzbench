@@ -28,6 +28,7 @@ from analysis.plot_palette import (
     non_fuzzer_shades,
 )
 from analysis.events_to_cumulative import normalize_fuzzer, split_instance_label
+from analysis import analyze
 from analysis.trial_run import (
     MIN_BUDGET_HOURS,
     MIN_RUNS_PER_FUZZER,
@@ -122,12 +123,17 @@ def list_fuzzers_from_logs(*, logs_dir: Path, raw_labels: bool) -> List[str]:
     if not logs_dir.is_dir():
         die(f"logs dir is not a directory: {logs_dir}")
 
-    fuzzers: set[str] = set()
+    labels: List[str] = []
     for instance_dir in sorted([p for p in logs_dir.iterdir() if p.is_dir()]):
         instance_id, fuzzer_label = split_instance_label(instance_dir.name)
         if instance_id == "unknown":
             continue
-        fuzzer = fuzzer_label if raw_labels else normalize_fuzzer(fuzzer_label)
+        labels.append(fuzzer_label)
+
+    series_map = analyze.build_series_map(labels, raw_labels=raw_labels)
+    fuzzers: set[str] = set()
+    for fuzzer_label in labels:
+        fuzzer = analyze.series_for_label(fuzzer_label, series_map)
         if str(fuzzer).strip():
             fuzzers.add(str(fuzzer).strip())
     return sorted(fuzzers)

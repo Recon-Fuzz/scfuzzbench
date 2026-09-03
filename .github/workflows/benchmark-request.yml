@@ -26,6 +26,7 @@ jobs:
       timeout_hours: ${{ steps.prepare.outputs.timeout_hours }}
       preliminary_interval_minutes: ${{ steps.prepare.outputs.preliminary_interval_minutes }}
       fuzzers_json: ${{ steps.prepare.outputs.fuzzers_json }}
+      fuzzer_variants_json: ${{ steps.prepare.outputs.fuzzer_variants_json }}
       foundry_git_repo: ${{ steps.prepare.outputs.foundry_git_repo }}
       foundry_git_ref: ${{ steps.prepare.outputs.foundry_git_ref }}
       echidna_version: ${{ steps.prepare.outputs.echidna_version }}
@@ -417,6 +418,89 @@ jobs:
               errors.push("preliminary_interval_minutes must be 0 or at least 1");
             }
 
+            // Variants run one built-in fuzzer a second time under its own key,
+            // so a benchmark can compare two revisions of the same fuzzer.
+            let variants = payload["fuzzer_variants"];
+            if (variants === undefined || variants === null) {
+              variants = [];
+            }
+            const sanitizedVariants = [];
+            if (!Array.isArray(variants)) {
+              errors.push("fuzzer_variants must be an array of {key, base, version, env} objects");
+            } else if (variants.length > 8) {
+              errors.push("fuzzer_variants has too many entries (max 8)");
+            } else {
+              const variantKeyRe = /^[a-z0-9][a-z0-9-]{0,63}$/;
+              for (const variant of variants) {
+                if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+                  errors.push("Each fuzzer_variants entry must be an object");
+                  continue;
+                }
+                const unknownFields = Object.keys(variant).filter(
+                  (field) => !["key", "base", "version", "env"].includes(field)
+                );
+                if (unknownFields.length > 0) {
+                  errors.push(`fuzzer variant has unsupported field(s): ${unknownFields.join(", ")}`);
+                  continue;
+                }
+                const key = variant["key"];
+                const base = variant["base"];
+                if (typeof key !== "string" || !variantKeyRe.test(key)) {
+                  errors.push(`Invalid fuzzer variant key: ${JSON.stringify(key)}`);
+                  continue;
+                }
+                if (typeof base !== "string" || !SUPPORTED_FUZZERS.has(base)) {
+                  errors.push(`Fuzzer variant base is not a supported cloud fuzzer: ${JSON.stringify(base)}`);
+                  continue;
+                }
+                // The prefix keeps the runtime label parseable by the analysis
+                // scripts, which pick a log parser from the fuzzer name.
+                if (!key.startsWith(`${base}-`)) {
+                  errors.push(`Fuzzer variant key ${key} must start with "${base}-"`);
+                  continue;
+                }
+                if (SUPPORTED_FUZZERS.has(key)) {
+                  errors.push(`Fuzzer variant key ${key} shadows a built-in fuzzer`);
+                  continue;
+                }
+                if (sanitizedVariants.some((entry) => entry.key === key)) {
+                  errors.push(`Duplicate fuzzer variant key: ${key}`);
+                  continue;
+                }
+                const version = variant["version"] === undefined || variant["version"] === null
+                  ? ""
+                  : variant["version"];
+                if (typeof version !== "string" || !/^[A-Za-z0-9._+-]*$/.test(version)) {
+                  errors.push(`Invalid version for fuzzer variant ${key}`);
+                  continue;
+                }
+                const variantEnvRaw = variant["env"] === undefined || variant["env"] === null
+                  ? {}
+                  : variant["env"];
+                if (typeof variantEnvRaw !== "object" || Array.isArray(variantEnvRaw)) {
+                  errors.push(`Fuzzer variant env for ${key} must be a JSON object`);
+                  continue;
+                }
+                // Same rules as fuzzer_env_json, including the tool-version keys
+                // that must come from the variant's own version field.
+                const variantEnv = parseInnerEnvJson(JSON.stringify(variantEnvRaw));
+                if (!variantEnv.ok) {
+                  errors.push(`fuzzer_variants[${key}].env: ${variantEnv.message}`);
+                  continue;
+                }
+                sanitizedVariants.push({
+                  key,
+                  base,
+                  version,
+                  env: variantEnv.value ? JSON.parse(variantEnv.value) : {},
+                });
+              }
+            }
+            const variantKeys = sanitizedVariants.map((entry) => entry.key);
+            const fuzzerVariantsJson = sanitizedVariants.length > 0
+              ? JSON.stringify(sanitizedVariants)
+              : "";
+
             let fuzzers = payload["fuzzers"];
             if (fuzzers === undefined || fuzzers === null) {
               fuzzers = DEFAULT_FUZZERS;
@@ -438,7 +522,7 @@ jobs:
                   errors.push(`Invalid fuzzer key: ${JSON.stringify(v)}`);
                   continue;
                 }
-                if (!SUPPORTED_FUZZERS.has(v)) {
+                if (!SUPPORTED_FUZZERS.has(v) && !variantKeys.includes(v)) {
                   errors.push(`Unsupported cloud fuzzer key: ${JSON.stringify(v)}`);
                   continue;
                 }
@@ -448,6 +532,10 @@ jobs:
               if (fuzzers.length === 0) {
                 errors.push("fuzzers must include at least one valid fuzzer key");
               }
+            }
+            const missingVariants = variantKeys.filter((key) => !fuzzers.includes(key));
+            if (missingVariants.length > 0) {
+              errors.push(`fuzzers must list every fuzzer_variants key; missing: ${missingVariants.join(", ")}`);
             }
             const fuzzersJson = JSON.stringify(fuzzers);
 
@@ -753,6 +841,7 @@ jobs:
                   `- Timeout hours: \`${hours.value}\``,
                   `- Preliminary checkpoint minutes: \`${preliminaryIntervalMinutes}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
+                  ...(fuzzerVariantsJson ? [`- Fuzzer variants: \`${fuzzerVariantsJson}\``] : []),
                   shared_seed_corpus_source.value ? `- Shared seeds: \`${shared_seed_corpus_source.value}\`` : "",
                   "",
                   `To start: a maintainer must apply \`${LABEL_APPROVED}\`.`,
@@ -779,6 +868,7 @@ jobs:
                   `- Timeout hours: \`${hours.value}\``,
                   `- Preliminary checkpoint minutes: \`${preliminaryIntervalMinutes}\``,
                   `- Fuzzers: \`${fuzzersJson}\``,
+                  ...(fuzzerVariantsJson ? [`- Fuzzer variants: \`${fuzzerVariantsJson}\``] : []),
                   shared_seed_corpus_source.value ? `- Shared seeds: \`${shared_seed_corpus_source.value}\`` : "",
                 ].join("\n")
               );
@@ -793,6 +883,7 @@ jobs:
               core.setOutput("timeout_hours", String(hours.value));
               core.setOutput("preliminary_interval_minutes", String(preliminaryIntervalMinutes));
               core.setOutput("fuzzers_json", fuzzersJson);
+              core.setOutput("fuzzer_variants_json", fuzzerVariantsJson);
 
               core.setOutput("foundry_git_repo", foundry_git_repo.ok ? foundry_git_repo.value : "");
               core.setOutput("foundry_git_ref", foundry_git_ref.ok ? foundry_git_ref.value : "");
@@ -837,6 +928,7 @@ jobs:
       timeout_hours: ${{ fromJSON(needs.prepare.outputs.timeout_hours) }}
       preliminary_interval_minutes: ${{ fromJSON(needs.prepare.outputs.preliminary_interval_minutes) }}
       fuzzers_json: ${{ needs.prepare.outputs.fuzzers_json }}
+      fuzzer_variants_json: ${{ needs.prepare.outputs.fuzzer_variants_json }}
       foundry_git_repo: ${{ needs.prepare.outputs.foundry_git_repo }}
       foundry_git_ref: ${{ needs.prepare.outputs.foundry_git_ref }}
       echidna_version: ${{ needs.prepare.outputs.echidna_version }}

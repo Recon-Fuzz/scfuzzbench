@@ -63,9 +63,15 @@ class FoundryVersionScopeTests(unittest.TestCase):
             ),
             1,
         )
+        # Instances read their version from the per-fuzzer-key map, which is
+        # seeded from the release version, so a git build still claims no tag.
+        self.assertIn(
+            '"foundry"      = local.foundry_release_version',
+            terraform,
+        )
         self.assertIn(
             "foundry_version_b64              = "
-            "base64encode(local.foundry_release_version)",
+            'base64encode(local.instance_tool_version[instance_key]["foundry"])',
             terraform,
         )
 

@@ -95,6 +95,7 @@ const reconVersion = ref("");
 const gitTokenSsmParameterName = ref("/scfuzzbench/recon/github_token");
 
 const fuzzerEnvJson = ref("");
+const fuzzerVariantsJson = ref("");
 
 function normalizeRepoUrl(raw: string): string {
   return raw
@@ -158,7 +159,7 @@ const estimatedCostUsd = computed<number | null>(() => {
   if (!Number.isFinite(perInstanceHour) || perInstanceHour <= 0) {
     return null;
   }
-  const selectedFuzzers = participatingFuzzerKeys.value.length;
+  const selectedFuzzers = requestedFuzzerKeys.value.length;
   const instances = Number(instancesPerFuzzer.value);
   const hours = Number(timeoutHours.value);
   if (!Number.isFinite(instances) || instances <= 0 || !Number.isFinite(hours) || hours <= 0 || selectedFuzzers <= 0) {
@@ -199,6 +200,37 @@ const normalizedFuzzerEnvJson = computed(() => {
   }
 });
 
+// Variants run one of the selected fuzzers a second time at another revision,
+// e.g. two Echidna releases in the same benchmark.
+const parsedFuzzerVariants = computed<Record<string, unknown>[]>(() => {
+  const raw = fuzzerVariantsJson.value.trim();
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (entry): entry is Record<string, unknown> =>
+        Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
+    );
+  } catch {
+    return [];
+  }
+});
+
+const fuzzerVariantKeys = computed(() =>
+  parsedFuzzerVariants.value
+    .map((variant) => (typeof variant.key === "string" ? variant.key.trim() : ""))
+    .filter((key) => key.length > 0)
+);
+
+const requestedFuzzerKeys = computed(() =>
+  Array.from(new Set([...participatingFuzzerKeys.value, ...fuzzerVariantKeys.value]))
+);
+
 const requestJson = computed(() => {
   const payload: Record<string, unknown> = {
     target_repo_url: targetRepoUrl.value.trim(),
@@ -208,7 +240,8 @@ const requestJson = computed(() => {
     instances_per_fuzzer: instancesPerFuzzer.value,
     timeout_hours: timeoutHours.value,
     preliminary_interval_minutes: preliminaryIntervalMinutes.value,
-    fuzzers: participatingFuzzerKeys.value,
+    fuzzers: requestedFuzzerKeys.value,
+    fuzzer_variants: parsedFuzzerVariants.value,
 
     foundry_git_repo: foundryGitRepo.value.trim(),
     foundry_git_ref: foundryGitRef.value.trim(),
@@ -500,7 +533,22 @@ const showAdvanced = ref(false);
 	              placeholder='{"SCFUZZBENCH_PROPERTIES_PATH":"..."}'
 	            />
 	          </label>
+
+          <label class="sb-start__field sb-start__field--full">
+            <div class="sb-start__label">Fuzzer variants JSON (optional)</div>
+	            <textarea
+	              v-model="fuzzerVariantsJson"
+	              class="sb-start__input sb-start__textarea"
+	              rows="4"
+	              placeholder='[{"key":"echidna-2-2-6","base":"echidna","version":"2.2.6"}]'
+	            />
+	          </label>
         </div>
+
+        <p class="sb-start__hint">
+          Use <code>fuzzer_variants</code> to run one fuzzer twice at different revisions. A variant key must start
+          with <code>&lt;base&gt;-</code> and is added to <code>fuzzers</code> automatically.
+        </p>
 
         <p class="sb-start__hint">
           Cloud runs build Foundry from the pinned git ref. The <code>--foundry-version</code> release override is

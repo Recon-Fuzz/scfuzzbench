@@ -10,15 +10,17 @@ fi
 export PATH="${HOME}/.foundry/bin:${PATH}"
 
 if [[ -n "${FOUNDRY_LABEL:-}" ]]; then
+  # An explicit FOUNDRY_LABEL wins over the label a variant would derive.
   SCFUZZBENCH_FUZZER_LABEL="${FOUNDRY_LABEL}"
+  default_fuzzer_label="${FOUNDRY_LABEL}"
 elif [[ -f "${SCFUZZBENCH_ROOT:-/opt/scfuzzbench}/foundry_commit" ]]; then
   foundry_commit=$(cat "${SCFUZZBENCH_ROOT:-/opt/scfuzzbench}/foundry_commit")
-  SCFUZZBENCH_FUZZER_LABEL="foundry-git-${foundry_commit}"
+  default_fuzzer_label="foundry-git-${foundry_commit}"
 else
   require_env FOUNDRY_VERSION
-  SCFUZZBENCH_FUZZER_LABEL="foundry-${FOUNDRY_VERSION}"
+  default_fuzzer_label="foundry-${FOUNDRY_VERSION}"
 fi
-export SCFUZZBENCH_FUZZER_LABEL
+set_fuzzer_label "foundry" "${default_fuzzer_label}"
 
 clone_target
 capture_target_workspace_anchor

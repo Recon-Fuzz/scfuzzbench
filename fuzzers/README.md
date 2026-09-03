@@ -10,6 +10,19 @@ rejected; use their dedicated workflow/Terraform inputs instead. Corpus
 directory overrides must be repo-relative paths and are resolved strictly
 beneath the cloned target before any reset or upload.
 
+## Running one fuzzer twice (variants)
+
+`fuzzer_variants` runs a built-in fuzzer's scripts under a new key with its own
+pinned version, so a benchmark can compare two revisions of the same fuzzer:
+
+```json
+[{"key": "echidna-2-2-6", "base": "echidna", "version": "2.2.6"}]
+```
+
+The key must start with `<base>-` and must also be listed in `fuzzers`. The
+runner labels the variant by its key, which keeps the two revisions apart in
+artifact names and in the analysis charts. See `docs/operations.md`.
+
 ## Shared settings
 
 - `properties_path` (dedicated Terraform/workflow input): repo-relative path to the properties file that gets patched for `benchmark_type` switching.

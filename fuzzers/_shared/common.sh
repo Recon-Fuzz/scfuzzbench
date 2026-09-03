@@ -117,6 +117,30 @@ require_env() {
   done
 }
 
+# Artifact names and analysis series are keyed on this label. A fuzzer variant
+# runs its base fuzzer's bundled scripts under its own key, so that key becomes
+# the label and keeps two revisions of one fuzzer distinct downstream.
+set_fuzzer_label() {
+  local base=$1
+  local default_label=$2
+  local label="${SCFUZZBENCH_FUZZER_LABEL:-}"
+  if [[ -z "${label}" ]]; then
+    if [[ -n "${SCFUZZBENCH_FUZZER_KEY:-}" && "${SCFUZZBENCH_FUZZER_KEY}" != "${base}" ]]; then
+      label="${SCFUZZBENCH_FUZZER_KEY}"
+    else
+      label="${default_label}"
+    fi
+  fi
+  # Keep the label safe for S3 keys and directory names.
+  label=$(printf '%s' "${label}" | tr -c 'A-Za-z0-9._-' '-')
+  if [[ -z "${label}" ]]; then
+    label="${default_label}"
+  fi
+  SCFUZZBENCH_FUZZER_LABEL="${label}"
+  export SCFUZZBENCH_FUZZER_LABEL
+  log "Fuzzer label: ${SCFUZZBENCH_FUZZER_LABEL}"
+}
+
 is_positive_int() {
   local value=$1
   [[ "${value}" =~ ^[0-9]+$ ]] && [[ "${value}" -gt 0 ]]
