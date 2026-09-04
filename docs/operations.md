@@ -42,6 +42,34 @@ Rules:
 - `version` pins the variant's release of its base fuzzer. Versions are never
   accepted through `env`, so the revision is recorded in the benchmark manifest.
 - `env` accepts the same keys as `fuzzer_env` and is merged over it.
+- `ci` pins an Echidna CI-artifact build for that variant instead of a release,
+  which is how one benchmark compares two Echidna builds (say master against a
+  PR). It takes `run_id`, `artifact_name`, `artifact_sha256` and `commit`; the
+  repository and token parameter are inherited from the run-level
+  `echidna_ci_*` inputs, so the instance role still reads one SSM parameter.
+- `source` is the Medusa equivalent: `git_ref` and `git_commit`, with the
+  repository and Go toolchain pin inherited from the run-level `medusa_git_*`
+  inputs, so two Medusa commits can be compared in one run.
+
+A variant pins exactly one of `version`, `ci` or `source`. A variant that pins
+a `version` opts out of the run-level bleeding-edge build, so a CI or source
+build can be compared against a published release. Every variant build is
+verified against the upstream API in the same preflight as the run-level one,
+and must differ from the run-level commit.
+
+Comparing two Medusa commits in a single run:
+
+```bash
+export TF_VAR_fuzzers='["medusa","medusa-v1-4-1"]'
+export TF_VAR_fuzzer_variants='[{"key":"medusa-v1-4-1","base":"medusa","source":{"git_ref":"v1.4.1","git_commit":"3857153837ab90ed73adc484414b4b43703a54fb"}}]'
+```
+
+Comparing master against a PR build in a single run:
+
+```bash
+export TF_VAR_fuzzers='["echidna","echidna-pr-1614"]'
+export TF_VAR_fuzzer_variants='[{"key":"echidna-pr-1614","base":"echidna","ci":{"run_id":"33555211362","artifact_name":"echidna-redistributable-x86_64-linux","artifact_sha256":"c480d8599e643ee587cdb51fdffadb73a5291f46d97002398ab6ffadc55198b0","commit":"55842ac2da34f40992cf48f211a0df1ede8e2fb9"}}]'
+```
 
 Through the GitHub workflows the same request is `fuzzer_variants` in the issue
 JSON (`fuzzer_variants_json` for `workflow_dispatch`).

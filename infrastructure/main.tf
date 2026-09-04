@@ -144,6 +144,16 @@ locals {
         key     = variant.key
         base    = variant.base
         version = variant.version
+        ci = variant.ci == null ? null : {
+          run_id          = variant.ci.run_id
+          artifact_name   = variant.ci.artifact_name
+          artifact_sha256 = lower(variant.ci.artifact_sha256)
+          commit          = lower(variant.ci.commit)
+        }
+        source = variant.source == null ? null : {
+          git_ref    = variant.source.git_ref
+          git_commit = lower(variant.source.git_commit)
+        }
       }
     ]
     } : {}, var.shared_seed_corpus_source != "" ? {
@@ -300,6 +310,60 @@ locals {
     }
   }
 
+  # A variant may pin its own Echidna CI build. Repository and token parameter
+  # stay run-level, so the instance role still reads one SSM parameter.
+  variant_ci_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => variant.ci if variant.ci != null
+  }
+  # A variant that pins its own release opts out of the run-level bleeding-edge
+  # build, so a CI build can be compared against a published release.
+  variant_release_keys = [
+    for variant in var.fuzzer_variants :
+    variant.key if variant.version != ""
+  ]
+  instance_echidna_ci = {
+    for instance_key, instance in local.instance_map : instance_key => (
+      instance.fuzzer.base != "echidna" ||
+      contains(local.variant_release_keys, instance.fuzzer.key) ? {
+        run_id          = ""
+        artifact_name   = ""
+        artifact_sha256 = ""
+        commit          = ""
+        } : lookup(local.variant_ci_by_key, instance.fuzzer.key, {
+          run_id          = var.echidna_ci_run_id
+          artifact_name   = var.echidna_ci_artifact_name
+          artifact_sha256 = var.echidna_ci_artifact_sha256
+          commit          = var.echidna_ci_commit
+      })
+    )
+  }
+  variant_source_by_key = {
+    for variant in var.fuzzer_variants :
+    variant.key => variant.source if variant.source != null
+  }
+  instance_medusa_source = {
+    for instance_key, instance in local.instance_map : instance_key => (
+      instance.fuzzer.base != "medusa" ||
+      contains(local.variant_release_keys, instance.fuzzer.key) ? {
+        git_repo   = ""
+        git_ref    = ""
+        git_commit = ""
+        } : contains(keys(local.variant_source_by_key), instance.fuzzer.key) ? {
+        # A variant source build reuses the run-level repository and Go pin.
+        git_repo   = var.medusa_git_repo
+        git_ref    = local.variant_source_by_key[instance.fuzzer.key].git_ref
+        git_commit = local.variant_source_by_key[instance.fuzzer.key].git_commit
+        } : {
+        git_repo   = var.medusa_git_repo
+        git_ref    = var.medusa_git_ref
+        git_commit = var.medusa_git_commit
+      }
+    )
+  }
+  variant_ci_keys     = sort(keys(local.variant_ci_by_key))
+  variant_source_keys = sort(keys(local.variant_source_by_key))
+
   # Install-mode wiring follows the base fuzzer, so an Echidna variant still
   # gets Echidna's CI-artifact inputs.
   selected_fuzzer_bases = [for fuzzer in local.fuzzer_definitions : fuzzer.base]
@@ -348,28 +412,28 @@ locals {
         foundry_git_ref_b64              = base64encode(var.foundry_git_ref)
         echidna_version_b64              = base64encode(local.instance_tool_version[instance_key]["echidna"])
         echidna_ci_repo_b64              = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")
-        echidna_ci_run_id_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_run_id : "")
-        echidna_ci_artifact_name_b64     = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_name : "")
-        echidna_ci_artifact_sha256_b64   = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_artifact_sha256 : "")
-        echidna_ci_commit_b64            = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_commit : "")
+        echidna_ci_run_id_b64            = base64encode(local.instance_echidna_ci[instance_key].run_id)
+        echidna_ci_artifact_name_b64     = base64encode(local.instance_echidna_ci[instance_key].artifact_name)
+        echidna_ci_artifact_sha256_b64   = base64encode(local.instance_echidna_ci[instance_key].artifact_sha256)
+        echidna_ci_commit_b64            = base64encode(local.instance_echidna_ci[instance_key].commit)
         echidna_ci_token_ssm_parameter_name_b64 = base64encode(
           instance.fuzzer.base == "echidna" ? var.echidna_ci_token_ssm_parameter_name : ""
         )
         medusa_version_b64 = base64encode(local.instance_tool_version[instance_key]["medusa"])
         medusa_git_repo_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_repo : ""
+          local.instance_medusa_source[instance_key].git_repo
         )
         medusa_git_ref_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_ref : ""
+          local.instance_medusa_source[instance_key].git_ref
         )
         medusa_git_commit_b64 = base64encode(
-          instance.fuzzer.base == "medusa" ? var.medusa_git_commit : ""
+          local.instance_medusa_source[instance_key].git_commit
         )
         medusa_go_version_b64 = base64encode(
-          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_version : ""
+          local.instance_medusa_source[instance_key].git_repo != "" ? var.medusa_go_version : ""
         )
         medusa_go_sha256_b64 = base64encode(
-          instance.fuzzer.base == "medusa" && local.medusa_source_enabled ? var.medusa_go_sha256 : ""
+          local.instance_medusa_source[instance_key].git_repo != "" ? var.medusa_go_sha256 : ""
         )
         recon_version_b64                 = base64encode(local.instance_tool_version[instance_key]["recon-fuzzer"])
         git_token_ssm_parameter_name_b64  = base64encode(var.git_token_ssm_parameter_name)
@@ -852,6 +916,16 @@ resource "aws_instance" "fuzzer" {
     precondition {
       condition     = var.echidna_ci_token_kms_key_arn == "" || local.echidna_ci_enabled
       error_message = "echidna_ci_token_kms_key_arn is valid only with Echidna CI artifact mode."
+    }
+
+    precondition {
+      condition     = length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled
+      error_message = "Fuzzer variant CI builds require the run-level Echidna CI inputs: ${join(", ", local.variant_ci_keys)}."
+    }
+
+    precondition {
+      condition     = length(local.variant_source_keys) == 0 || local.medusa_source_enabled
+      error_message = "Fuzzer variant source builds require the run-level Medusa source inputs: ${join(", ", local.variant_source_keys)}."
     }
 
     precondition {

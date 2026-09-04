@@ -643,7 +643,17 @@ variable "fuzzer_variants" {
     key     = string
     base    = string
     version = optional(string, "")
-    env     = optional(map(string), {})
+    ci = optional(object({
+      run_id          = string
+      artifact_name   = string
+      artifact_sha256 = string
+      commit          = string
+    }))
+    source = optional(object({
+      git_ref    = string
+      git_commit = string
+    }))
+    env = optional(map(string), {})
   }))
   description = "Extra runs of a built-in fuzzer under a new key with its own env, so one benchmark can compare two revisions of the same fuzzer."
   default     = []
@@ -688,6 +698,64 @@ variable "fuzzer_variants" {
       can(regex("^[A-Za-z0-9._+-]*$", variant.version))
     ])
     error_message = "fuzzer_variants version must contain only [A-Za-z0-9._+-]."
+  }
+
+  # A variant may instead pin a bleeding-edge CI build of its base fuzzer. The
+  # repository and token parameter are inherited from the run-level Echidna CI
+  # inputs, so the instance role still reads exactly one SSM parameter.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.ci == null ? true : variant.base == "echidna"
+    ])
+    error_message = "fuzzer_variants may pin a CI build only for the echidna base."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.ci == null ? true : variant.version == ""
+    ])
+    error_message = "A fuzzer variant cannot pin both a version and a CI build."
+  }
+
+  # The conditional operator is required here: Terraform evaluates both sides
+  # of "||", which would dereference a null ci on release-pinned variants.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.ci == null ? true : (
+        can(regex("^[1-9][0-9]*$", variant.ci.run_id)) &&
+        can(regex("^[A-Za-z0-9._-]+$", variant.ci.artifact_name)) &&
+        strcontains(lower(variant.ci.artifact_name), "linux") &&
+        can(regex("^[A-Fa-f0-9]{64}$", variant.ci.artifact_sha256)) &&
+        can(regex("^[A-Fa-f0-9]{40}$", variant.ci.commit))
+      )
+    ])
+    error_message = "fuzzer_variants ci requires a positive run_id, a Linux artifact_name, a SHA-256 artifact_sha256, and a full commit."
+  }
+
+  # Medusa's bleeding-edge path is a git source build, so it gets its own
+  # block under the same rules as ci.
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.source == null ? true : (
+        variant.base == "medusa" && variant.version == "" && variant.ci == null
+      )
+    ])
+    error_message = "fuzzer_variants source is medusa-only and cannot be combined with version or ci."
+  }
+
+  validation {
+    condition = alltrue([
+      for variant in var.fuzzer_variants :
+      variant.source == null ? true : (
+        can(regex("^[A-Za-z0-9._/-]+$", variant.source.git_ref)) &&
+        can(regex("^[A-Fa-f0-9]{40}$", variant.source.git_commit))
+      )
+    ])
+    error_message = "fuzzer_variants source requires a git_ref without spaces and a full git_commit."
   }
 
   validation {

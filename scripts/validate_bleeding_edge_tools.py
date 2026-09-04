@@ -244,6 +244,54 @@ def validate_go_toolchain(*, version: str, expected_sha256: str) -> dict[str, st
     return {"filename": filename, "sha256": digest, "size": size}
 
 
+def parse_variant_builds(raw: str, field: str, required: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Return the fuzzer variants that pin their own build under `field`."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        variants = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"invalid fuzzer variants JSON: {exc}") from exc
+    if not isinstance(variants, list):
+        raise ValidationError("fuzzer variants JSON must be a list")
+    selected: list[dict[str, Any]] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            raise ValidationError("each fuzzer variant must be an object")
+        build = variant.get(field)
+        if not build:
+            continue
+        if not isinstance(build, dict):
+            raise ValidationError(f"fuzzer variant {field} must be an object")
+        missing = [name for name in required if not str(build.get(name, "") or "").strip()]
+        if missing:
+            raise ValidationError(
+                f"fuzzer variant {variant.get('key')!r} {field} is missing: "
+                + ", ".join(missing)
+            )
+        selected.append({"key": str(variant.get("key", "")), "build": build})
+    return selected
+
+
+def parse_variant_ci(raw: str) -> list[dict[str, Any]]:
+    """Return the fuzzer variants that pin their own Echidna CI build."""
+    return [
+        {"key": item["key"], "ci": item["build"]}
+        for item in parse_variant_builds(
+            raw, "ci", ("run_id", "artifact_name", "artifact_sha256", "commit")
+        )
+    ]
+
+
+def parse_variant_source(raw: str) -> list[dict[str, Any]]:
+    """Return the fuzzer variants that pin their own Medusa source build."""
+    return [
+        {"key": item["key"], "source": item["build"]}
+        for item in parse_variant_builds(raw, "source", ("git_ref", "git_commit"))
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--echidna-ci-repo", default="")
@@ -251,6 +299,11 @@ def main() -> int:
     parser.add_argument("--echidna-ci-artifact-name", default="")
     parser.add_argument("--echidna-ci-artifact-sha256", default="")
     parser.add_argument("--echidna-ci-commit", default="")
+    parser.add_argument(
+        "--fuzzer-variants-json",
+        default="",
+        help="Fuzzer variants; every variant CI build is verified too.",
+    )
     parser.add_argument("--medusa-git-repo", default="")
     parser.add_argument("--medusa-git-ref", default="")
     parser.add_argument("--medusa-git-commit", default="")
@@ -268,15 +321,41 @@ def main() -> int:
                 artifact_sha256=args.echidna_ci_artifact_sha256,
                 expected_commit=args.echidna_ci_commit,
             )
+            # A variant CI build reuses the run-level repository, so the
+            # same preflight applies to each one before any spend.
+            for variant in parse_variant_ci(args.fuzzer_variants_json):
+                results[f"echidna:{variant['key']}"] = validate_echidna_artifact(
+                    repo_url=args.echidna_ci_repo,
+                    run_id=variant["ci"]["run_id"],
+                    artifact_name=variant["ci"]["artifact_name"],
+                    artifact_sha256=variant["ci"]["artifact_sha256"],
+                    expected_commit=variant["ci"]["commit"],
+                )
+        elif parse_variant_ci(args.fuzzer_variants_json):
+            raise ValidationError(
+                "fuzzer variant CI builds require the run-level Echidna CI inputs"
+            )
         if args.medusa_git_repo:
             results["medusa"] = validate_medusa_source(
                 repo_url=args.medusa_git_repo,
                 git_ref=args.medusa_git_ref,
                 expected_commit=args.medusa_git_commit,
             )
+            # A variant source build reuses the run-level repository, so the
+            # same preflight applies to each one before any spend.
+            for variant in parse_variant_source(args.fuzzer_variants_json):
+                results[f"medusa:{variant['key']}"] = validate_medusa_source(
+                    repo_url=args.medusa_git_repo,
+                    git_ref=variant["source"]["git_ref"],
+                    expected_commit=variant["source"]["git_commit"],
+                )
             results["medusa_go"] = validate_go_toolchain(
                 version=args.medusa_go_version,
                 expected_sha256=args.medusa_go_sha256,
+            )
+        elif parse_variant_source(args.fuzzer_variants_json):
+            raise ValidationError(
+                "fuzzer variant source builds require the run-level Medusa source inputs"
             )
     except ValidationError as exc:
         parser.exit(1, f"error: {exc}\n")
