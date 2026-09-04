@@ -74,7 +74,7 @@ export default defineConfig({
 
     footer: {
       message: "Fully static. Generated in CI from S3 run artifacts.",
-      copyright: "Copyright © Recon-Fuzz.",
+      copyright: "Copyright © scfuzzbench.",
     },
   },
 });
