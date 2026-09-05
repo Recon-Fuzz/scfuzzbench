@@ -124,6 +124,20 @@ so watching another fuzzer is a configuration entry rather than new code.
 - Comment bodies are untrusted: the command grammar is strict, values are
   re-validated by the shared request validators, and nothing reaches a shell.
 
+### Results
+
+A request is not closed when the benchmark is provisioned: the analysis and the
+run page are published later, so a link posted at that point returns 404 until
+the docs site is regenerated. The request instead moves to
+`benchmark/04-running` and stays open. After a docs deployment, every open
+request whose run page is actually reachable gets a comment with the link, moves
+to `benchmark/05-published`, and is closed.
+
+Because an externally proposed request mentions its source pull request,
+GitHub cross-links the two, and that final comment is visible from the pull
+request without this repository holding any write access to the watched
+repository.
+
 ### Command
 
 ```text

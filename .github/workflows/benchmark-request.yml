@@ -1231,8 +1231,28 @@ jobs:
             const LABEL_PENDING = "benchmark/01-pending";
             const LABEL_VALIDATED = "benchmark/02-validated";
             const LABEL_APPROVED = "benchmark/03-approved";
-            const STATUS_LABELS = [LABEL_PENDING, LABEL_VALIDATED, LABEL_APPROVED];
+            const LABEL_RUNNING = "benchmark/04-running";
+            const LABEL_PUBLISHED = "benchmark/05-published";
+            const STATUS_LABELS = [
+              LABEL_PENDING,
+              LABEL_VALIDATED,
+              LABEL_APPROVED,
+              LABEL_RUNNING,
+              LABEL_PUBLISHED,
+            ];
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch {
+                try {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } catch {
+                  // A concurrent job may have created it first.
+                }
+              }
+            }
 
             async function listIssueComments() {
               return await github.paginate(github.rest.issues.listComments, {
@@ -1297,9 +1317,18 @@ jobs:
                 "Docs:",
                 `- ${docsUrl}`,
                 "",
-                "_Note: the docs site only shows **complete** runs (timeout + 1h grace)._",
+                "_The docs site only shows **complete** runs (timeout + 1h grace)._",
+                "",
+                "This request stays open until that page is published, and is then",
+                "closed with a link to it.",
               ].join("\n")
             );
 
-            await setStatusLabel(LABEL_APPROVED);
-            await github.rest.issues.update({ owner, repo, issue_number, state: "closed" });
+            // Closing here would leave a link that 404s until the docs site is
+            // regenerated, so hand the request over to the docs deployment.
+            await ensureLabel(
+              LABEL_RUNNING,
+              "fbca04",
+              "Benchmark provisioned; awaiting published results."
+            );
+            await setStatusLabel(LABEL_RUNNING);

@@ -345,7 +345,10 @@ def render_issue_body(
             f"<!-- {REQUEST_MARKER} -->",
             f"<!-- {dedupe_key(repo, comment_id)} -->",
             "",
-            f"Requested from {repo}#{pull_number} by @{requester} ({reason}).",
+            # A plain cross-repository reference: GitHub links this request
+            # from the pull request itself, so results are visible there
+            # without this repository holding any write access to it.
+            f"Tracking {repo}#{pull_number}, requested by @{requester} ({reason}).",
             "",
             "This issue only proposes a benchmark. A maintainer must still apply",
             "`benchmark/03-approved` before anything is provisioned.",
