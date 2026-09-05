@@ -65,8 +65,10 @@ const allFuzzerKeys = orderFuzzers(
     .filter((name): name is string => Boolean(name))
 );
 
-const selectableFuzzerKeys = allFuzzerKeys;
-const selectedFuzzerKeys = ref<string[]>([...allFuzzerKeys]);
+// Echidna is selected through its build options below, not this list.
+const selectedFuzzerKeys = ref<string[]>(
+  allFuzzerKeys.filter((name) => name !== "echidna")
+);
 const participatingFuzzerKeys = computed(() => {
   const selected = new Set(selectedFuzzerKeys.value);
   return allFuzzerKeys.filter((name) => selected.has(name));
@@ -97,9 +99,10 @@ const gitTokenSsmParameterName = ref("/scfuzzbench/recon/github_token");
 const fuzzerEnvJson = ref("");
 const fuzzerVariantsJson = ref("");
 
-// Comparing Echidna builds. The page is static, so the commit SHAs, CI run IDs
-// and artifact digests a request needs are resolved from the public GitHub API
-// when the builds are picked, rather than typed in by hand.
+// Echidna appears in the fuzzer list once per build people compare: the
+// published release, master, and a pull request. The page is static, so the
+// commit SHAs, CI run IDs and artifact digests those need are resolved from
+// the public GitHub API as soon as a build is picked.
 type ResolvedBuild = {
   kind: string;
   label: string;
@@ -111,83 +114,130 @@ type ResolvedBuild = {
   pullNumber?: number;
 };
 
-const compareLatestRelease = ref(false);
-const compareMaster = ref(false);
-const comparePullRequest = ref(false);
-const comparePullNumber = ref("");
-const compareResolving = ref(false);
-const compareError = ref("");
-const resolvedBuilds = ref<ResolvedBuild[]>([]);
+const echidnaOptions = [
+  { id: "release", label: "latest" },
+  { id: "master", label: "master" },
+  { id: "pull", label: "PR" },
+] as const;
 
-const compareSelectionCount = computed(
-  () =>
-    (compareLatestRelease.value ? 1 : 0) +
-    (compareMaster.value ? 1 : 0) +
-    (comparePullRequest.value ? 1 : 0)
-);
-
-const canResolveComparison = computed(() => {
-  if (compareSelectionCount.value < 2) {
-    return false;
-  }
-  if (comparePullRequest.value && !/^[0-9]+$/.test(comparePullNumber.value.trim())) {
-    return false;
-  }
-  return !compareResolving.value;
-});
+const otherFuzzerKeys = allFuzzerKeys.filter((name) => name !== "echidna");
+const selectedEchidnaOptions = ref<string[]>(["release"]);
+const echidnaPullNumber = ref("");
+const echidnaBuildStatus = ref<Record<string, string>>({});
+const echidnaResolveError = ref("");
+const resolvedEchidnaBuilds = ref<ResolvedBuild[]>([]);
 
 // A CI build installs from a token-protected Actions artifact, so a request
 // using one is incomplete without the parameter holding that token.
-const comparisonNeedsToken = computed(
+const echidnaNeedsToken = computed(
   () =>
-    resolvedBuilds.value.some((build) => build.kind === "ci") &&
+    resolvedEchidnaBuilds.value.some((build) => build.kind === "ci") &&
     !echidnaCiTokenSsmParameterName.value.trim()
 );
 
-function clearResolvedComparison() {
-  resolvedBuilds.value = [];
-  compareError.value = "";
+function echidnaPresetsFor(selection: string[]): Record<string, unknown>[] {
+  const presets: Record<string, unknown>[] = [];
+  if (selection.includes("release")) presets.push({ kind: "release", id: "release" });
+  if (selection.includes("master")) {
+    presets.push({ kind: "branch", ref: "master", id: "master" });
+  }
+  if (selection.includes("pull") && /^[0-9]+$/.test(echidnaPullNumber.value.trim())) {
+    presets.push({
+      kind: "pull",
+      number: Number(echidnaPullNumber.value.trim()),
+      id: "pull",
+    });
+  }
+  return presets;
 }
 
-async function resolveComparison() {
-  compareError.value = "";
-  compareResolving.value = true;
+function clearEchidnaBuildFields() {
+  echidnaVersion.value = "";
+  echidnaCiRepo.value = "";
+  echidnaCiRunId.value = "";
+  echidnaCiArtifactName.value = "";
+  echidnaCiArtifactSha256.value = "";
+  echidnaCiCommit.value = "";
+  fuzzerVariantsJson.value = "";
+  resolvedEchidnaBuilds.value = [];
+}
+
+let echidnaResolveToken = 0;
+
+async function resolveEchidnaSelection() {
+  const selection = [...selectedEchidnaOptions.value];
+  const presets = echidnaPresetsFor(selection);
+  echidnaResolveError.value = "";
+
+  if (presets.length === 0) {
+    echidnaBuildStatus.value = {};
+    clearEchidnaBuildFields();
+    return;
+  }
+  // The published release needs no lookup, so avoid spending a request on it.
+  if (presets.length === 1 && presets[0].kind === "release") {
+    echidnaBuildStatus.value = { release: "" };
+    clearEchidnaBuildFields();
+    return;
+  }
+
+  const token = ++echidnaResolveToken;
+  const pending: Record<string, string> = {};
+  for (const preset of presets) {
+    pending[String(preset.id)] = "resolving…";
+  }
+  echidnaBuildStatus.value = pending;
+
   try {
     const { githubApi, resolvePreset, buildRequestFields } = await import(
       "../lib/echidna-presets.js"
     );
     const api = githubApi();
-    const presets: Record<string, unknown>[] = [];
-    if (compareLatestRelease.value) presets.push({ kind: "release" });
-    if (compareMaster.value) presets.push({ kind: "branch", ref: "master" });
-    if (comparePullRequest.value) {
-      presets.push({ kind: "pull", number: Number(comparePullNumber.value.trim()) });
-    }
-
     const builds: ResolvedBuild[] = [];
+    const status: Record<string, string> = {};
     for (const preset of presets) {
-      builds.push((await resolvePreset(api, preset)) as ResolvedBuild);
+      const build = (await resolvePreset(api, preset)) as ResolvedBuild;
+      builds.push(build);
+      status[String(preset.id)] =
+        build.kind === "ci"
+          ? `${build.commit!.slice(0, 12)} · ${build.artifact_sha256!.slice(0, 12)}…`
+          : build.version!;
     }
-    const fields = buildRequestFields(builds);
+    // A newer selection started while this one was in flight.
+    if (token !== echidnaResolveToken) {
+      return;
+    }
 
+    const fields = buildRequestFields(builds);
     echidnaVersion.value = fields.echidna_version;
     echidnaCiRepo.value = fields.echidna_ci_repo;
     echidnaCiRunId.value = fields.echidna_ci_run_id;
     echidnaCiArtifactName.value = fields.echidna_ci_artifact_name;
     echidnaCiArtifactSha256.value = fields.echidna_ci_artifact_sha256;
     echidnaCiCommit.value = fields.echidna_ci_commit;
-    fuzzerVariantsJson.value = JSON.stringify(fields.fuzzer_variants);
-    // The variant keys join `fuzzers` on their own; only the base fuzzer is
-    // selected here so the comparison is not diluted by other fuzzers.
-    selectedFuzzerKeys.value = ["echidna"];
-    resolvedBuilds.value = builds;
+    fuzzerVariantsJson.value = fields.fuzzer_variants.length
+      ? JSON.stringify(fields.fuzzer_variants)
+      : "";
+    resolvedEchidnaBuilds.value = builds;
+    echidnaBuildStatus.value = status;
   } catch (error) {
-    resolvedBuilds.value = [];
-    compareError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    compareResolving.value = false;
+    if (token !== echidnaResolveToken) {
+      return;
+    }
+    clearEchidnaBuildFields();
+    echidnaBuildStatus.value = {};
+    echidnaResolveError.value =
+      error instanceof Error ? error.message : String(error);
   }
 }
+
+let echidnaResolveTimer: ReturnType<typeof setTimeout> | undefined;
+
+watch([selectedEchidnaOptions, echidnaPullNumber], () => {
+  // Typing a pull request number should not fire a request per keystroke.
+  clearTimeout(echidnaResolveTimer);
+  echidnaResolveTimer = setTimeout(resolveEchidnaSelection, 500);
+});
 
 function normalizeRepoUrl(raw: string): string {
   return raw
@@ -319,9 +369,13 @@ const fuzzerVariantKeys = computed(() =>
     .filter((key) => key.length > 0)
 );
 
-const requestedFuzzerKeys = computed(() =>
-  Array.from(new Set([...participatingFuzzerKeys.value, ...fuzzerVariantKeys.value]))
-);
+const requestedFuzzerKeys = computed(() => {
+  const keys = [...participatingFuzzerKeys.value, ...fuzzerVariantKeys.value];
+  if (selectedEchidnaOptions.value.length > 0) {
+    keys.unshift("echidna");
+  }
+  return Array.from(new Set(keys));
+});
 
 const requestJson = computed(() => {
   const payload: Record<string, unknown> = {
@@ -482,7 +536,35 @@ const showAdvanced = ref(false);
           <div class="sb-start__label">Fuzzers</div>
           <div class="sb-start__fuzzers">
             <label
-              v-for="fuzzer in selectableFuzzerKeys"
+              v-for="option in echidnaOptions"
+              :key="option.id"
+              class="sb-start__fuzzer-option"
+            >
+              <input
+                v-model="selectedEchidnaOptions"
+                class="sb-start__fuzzer-checkbox"
+                type="checkbox"
+                :value="option.id"
+              />
+              <span>
+                <code>echidna</code> ({{ option.label }})
+                <input
+                  v-if="option.id === 'pull'"
+                  v-model="echidnaPullNumber"
+                  class="sb-start__input sb-start__input--inline"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="1614"
+                  :disabled="!selectedEchidnaOptions.includes('pull')"
+                />
+                <small v-if="echidnaBuildStatus[option.id]" class="sb-start__build-note">
+                  {{ echidnaBuildStatus[option.id] }}
+                </small>
+              </span>
+            </label>
+
+            <label
+              v-for="fuzzer in otherFuzzerKeys"
               :key="fuzzer"
               class="sb-start__fuzzer-option"
             >
@@ -495,87 +577,15 @@ const showAdvanced = ref(false);
               <span><code>{{ fuzzer }}</code></span>
             </label>
           </div>
+
+          <p v-if="echidnaResolveError" class="sb-start__hint sb-start__hint--error">
+            {{ echidnaResolveError }}
+          </p>
+          <p v-if="echidnaNeedsToken" class="sb-start__hint sb-start__hint--error">
+            A <code>master</code> or pull request build also needs
+            <code>echidna_ci_token_ssm_parameter_name</code> under advanced settings.
+          </p>
         </label>
-      </div>
-
-      <div class="sb-start__compare">
-        <div class="sb-start__label">Compare Echidna builds (optional)</div>
-        <p class="sb-start__hint">
-          Pick at least two. Commit SHAs, CI run IDs and artifact digests are filled in for you.
-        </p>
-
-        <div class="sb-start__compare-options">
-          <label class="sb-start__fuzzer-option">
-            <input
-              v-model="compareLatestRelease"
-              class="sb-start__fuzzer-checkbox"
-              type="checkbox"
-              @change="clearResolvedComparison"
-            />
-            <span>latest release</span>
-          </label>
-
-          <label class="sb-start__fuzzer-option">
-            <input
-              v-model="compareMaster"
-              class="sb-start__fuzzer-checkbox"
-              type="checkbox"
-              @change="clearResolvedComparison"
-            />
-            <span><code>master</code></span>
-          </label>
-
-          <label class="sb-start__fuzzer-option">
-            <input
-              v-model="comparePullRequest"
-              class="sb-start__fuzzer-checkbox"
-              type="checkbox"
-              @change="clearResolvedComparison"
-            />
-            <span>pull request</span>
-            <input
-              v-model="comparePullNumber"
-              class="sb-start__input sb-start__input--inline"
-              type="text"
-              inputmode="numeric"
-              placeholder="1614"
-              :disabled="!comparePullRequest"
-              @input="clearResolvedComparison"
-            />
-          </label>
-        </div>
-
-        <div class="sb-start__compare-actions">
-          <button
-            class="sb-start__button sb-start__button--ghost"
-            type="button"
-            :disabled="!canResolveComparison"
-            @click="resolveComparison"
-          >
-            {{ compareResolving ? "Resolving…" : "Resolve builds" }}
-          </button>
-        </div>
-
-        <p v-if="compareError" class="sb-start__hint sb-start__hint--error">
-          {{ compareError }}
-        </p>
-
-        <ul v-if="resolvedBuilds.length" class="sb-start__compare-resolved">
-          <li v-for="build in resolvedBuilds" :key="build.label">
-            <code>{{ build.label }}</code>
-            <span v-if="build.kind === 'ci'">
-              — run <code>{{ build.run_id }}</code>,
-              <code>{{ build.artifact_name }}</code>,
-              digest <code>{{ build.artifact_sha256.slice(0, 12) }}…</code>
-            </span>
-            <span v-else>— installed from the published release</span>
-          </li>
-        </ul>
-
-        <p v-if="comparisonNeedsToken" class="sb-start__hint sb-start__hint--error">
-          A CI build also needs <code>echidna_ci_token_ssm_parameter_name</code> under
-          advanced settings.
-        </p>
       </div>
 
       <div class="sb-start__actions">

@@ -201,9 +201,10 @@ export function variantKeyFor(build) {
  * and the rest become variants. Release-pinned variants opt out of that build.
  */
 export function buildRequestFields(builds, { repo = ECHIDNA_REPO } = {}) {
+  // One build is a normal single-fuzzer run; two or more become a comparison.
   const selected = (builds || []).filter(Boolean);
-  if (selected.length < 2) {
-    throw new Error("pick at least two builds to compare");
+  if (selected.length === 0) {
+    throw new Error("pick at least one Echidna build");
   }
   const ciBuilds = selected.filter((build) => build.kind === "ci");
   const commits = ciBuilds.map((build) => build.commit);

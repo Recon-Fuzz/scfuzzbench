@@ -519,37 +519,20 @@
   border-top: 1px solid var(--vp-c-divider);
 }
 
-.sb-start__compare {
-  margin-top: 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 12px;
-}
-
-.sb-start__compare-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
-  margin: 10px 0;
-}
-
-.sb-start__compare-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
 .sb-start__input--inline {
-  width: 7em;
+  width: 6em;
   margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 12px;
 }
 
-.sb-start__compare-resolved {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  font-size: 13px;
-  line-height: 1.7;
-  word-break: break-word;
+.sb-start__build-note {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.7;
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .sb-start__hint--error {
