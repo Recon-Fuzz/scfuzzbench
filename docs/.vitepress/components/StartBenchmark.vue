@@ -97,6 +97,98 @@ const gitTokenSsmParameterName = ref("/scfuzzbench/recon/github_token");
 const fuzzerEnvJson = ref("");
 const fuzzerVariantsJson = ref("");
 
+// Comparing Echidna builds. The page is static, so the commit SHAs, CI run IDs
+// and artifact digests a request needs are resolved from the public GitHub API
+// when the builds are picked, rather than typed in by hand.
+type ResolvedBuild = {
+  kind: string;
+  label: string;
+  version?: string;
+  run_id?: string;
+  artifact_name?: string;
+  artifact_sha256?: string;
+  commit?: string;
+  pullNumber?: number;
+};
+
+const compareLatestRelease = ref(false);
+const compareMaster = ref(false);
+const comparePullRequest = ref(false);
+const comparePullNumber = ref("");
+const compareResolving = ref(false);
+const compareError = ref("");
+const resolvedBuilds = ref<ResolvedBuild[]>([]);
+
+const compareSelectionCount = computed(
+  () =>
+    (compareLatestRelease.value ? 1 : 0) +
+    (compareMaster.value ? 1 : 0) +
+    (comparePullRequest.value ? 1 : 0)
+);
+
+const canResolveComparison = computed(() => {
+  if (compareSelectionCount.value < 2) {
+    return false;
+  }
+  if (comparePullRequest.value && !/^[0-9]+$/.test(comparePullNumber.value.trim())) {
+    return false;
+  }
+  return !compareResolving.value;
+});
+
+// A CI build installs from a token-protected Actions artifact, so a request
+// using one is incomplete without the parameter holding that token.
+const comparisonNeedsToken = computed(
+  () =>
+    resolvedBuilds.value.some((build) => build.kind === "ci") &&
+    !echidnaCiTokenSsmParameterName.value.trim()
+);
+
+function clearResolvedComparison() {
+  resolvedBuilds.value = [];
+  compareError.value = "";
+}
+
+async function resolveComparison() {
+  compareError.value = "";
+  compareResolving.value = true;
+  try {
+    const { githubApi, resolvePreset, buildRequestFields } = await import(
+      "../lib/echidna-presets.js"
+    );
+    const api = githubApi();
+    const presets: Record<string, unknown>[] = [];
+    if (compareLatestRelease.value) presets.push({ kind: "release" });
+    if (compareMaster.value) presets.push({ kind: "branch", ref: "master" });
+    if (comparePullRequest.value) {
+      presets.push({ kind: "pull", number: Number(comparePullNumber.value.trim()) });
+    }
+
+    const builds: ResolvedBuild[] = [];
+    for (const preset of presets) {
+      builds.push((await resolvePreset(api, preset)) as ResolvedBuild);
+    }
+    const fields = buildRequestFields(builds);
+
+    echidnaVersion.value = fields.echidna_version;
+    echidnaCiRepo.value = fields.echidna_ci_repo;
+    echidnaCiRunId.value = fields.echidna_ci_run_id;
+    echidnaCiArtifactName.value = fields.echidna_ci_artifact_name;
+    echidnaCiArtifactSha256.value = fields.echidna_ci_artifact_sha256;
+    echidnaCiCommit.value = fields.echidna_ci_commit;
+    fuzzerVariantsJson.value = JSON.stringify(fields.fuzzer_variants);
+    // The variant keys join `fuzzers` on their own; only the base fuzzer is
+    // selected here so the comparison is not diluted by other fuzzers.
+    selectedFuzzerKeys.value = ["echidna"];
+    resolvedBuilds.value = builds;
+  } catch (error) {
+    resolvedBuilds.value = [];
+    compareError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    compareResolving.value = false;
+  }
+}
+
 function normalizeRepoUrl(raw: string): string {
   return raw
     .trim()
@@ -404,6 +496,86 @@ const showAdvanced = ref(false);
             </label>
           </div>
         </label>
+      </div>
+
+      <div class="sb-start__compare">
+        <div class="sb-start__label">Compare Echidna builds (optional)</div>
+        <p class="sb-start__hint">
+          Pick at least two. Commit SHAs, CI run IDs and artifact digests are filled in for you.
+        </p>
+
+        <div class="sb-start__compare-options">
+          <label class="sb-start__fuzzer-option">
+            <input
+              v-model="compareLatestRelease"
+              class="sb-start__fuzzer-checkbox"
+              type="checkbox"
+              @change="clearResolvedComparison"
+            />
+            <span>latest release</span>
+          </label>
+
+          <label class="sb-start__fuzzer-option">
+            <input
+              v-model="compareMaster"
+              class="sb-start__fuzzer-checkbox"
+              type="checkbox"
+              @change="clearResolvedComparison"
+            />
+            <span><code>master</code></span>
+          </label>
+
+          <label class="sb-start__fuzzer-option">
+            <input
+              v-model="comparePullRequest"
+              class="sb-start__fuzzer-checkbox"
+              type="checkbox"
+              @change="clearResolvedComparison"
+            />
+            <span>pull request</span>
+            <input
+              v-model="comparePullNumber"
+              class="sb-start__input sb-start__input--inline"
+              type="text"
+              inputmode="numeric"
+              placeholder="1614"
+              :disabled="!comparePullRequest"
+              @input="clearResolvedComparison"
+            />
+          </label>
+        </div>
+
+        <div class="sb-start__compare-actions">
+          <button
+            class="sb-start__button sb-start__button--ghost"
+            type="button"
+            :disabled="!canResolveComparison"
+            @click="resolveComparison"
+          >
+            {{ compareResolving ? "Resolving…" : "Resolve builds" }}
+          </button>
+        </div>
+
+        <p v-if="compareError" class="sb-start__hint sb-start__hint--error">
+          {{ compareError }}
+        </p>
+
+        <ul v-if="resolvedBuilds.length" class="sb-start__compare-resolved">
+          <li v-for="build in resolvedBuilds" :key="build.label">
+            <code>{{ build.label }}</code>
+            <span v-if="build.kind === 'ci'">
+              — run <code>{{ build.run_id }}</code>,
+              <code>{{ build.artifact_name }}</code>,
+              digest <code>{{ build.artifact_sha256.slice(0, 12) }}…</code>
+            </span>
+            <span v-else>— installed from the published release</span>
+          </li>
+        </ul>
+
+        <p v-if="comparisonNeedsToken" class="sb-start__hint sb-start__hint--error">
+          A CI build also needs <code>echidna_ci_token_ssm_parameter_name</code> under
+          advanced settings.
+        </p>
       </div>
 
       <div class="sb-start__actions">

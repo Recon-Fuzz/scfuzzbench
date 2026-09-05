@@ -21,6 +21,12 @@ Every target is a fork under the [scfuzzbench GitHub org](https://github.com/scf
 upstream baseline. Compare `pre-target...main` in the target repo to inspect the
 harness; use the manifest's pinned commit for a reproducible run.
 
+Comparing Echidna builds (latest release, `master`, a pull request) needs only
+the tick boxes in **Compare Echidna builds**: commit SHAs, CI run IDs and
+artifact digests are resolved from the public GitHub API and written into the
+request for you. A CI build additionally needs
+`echidna_ci_token_ssm_parameter_name` under advanced settings.
+
 <StartBenchmark />
 
 ::: warning
