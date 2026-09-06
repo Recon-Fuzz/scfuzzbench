@@ -519,6 +519,25 @@ locals {
                 + base64.b64encode(b"echidna").decode(),
                 variant,
             )
+            self.assertIn(
+                "decode_b64_env ECHIDNA_VERSION '"
+                + base64.b64encode(b"2.3.2").decode()
+                + "'",
+                variant,
+            )
+            for ci_variable in (
+                "ECHIDNA_CI_REPO",
+                "ECHIDNA_CI_RUN_ID",
+                "ECHIDNA_CI_ARTIFACT_NAME",
+                "ECHIDNA_CI_ARTIFACT_SHA256",
+                "ECHIDNA_CI_COMMIT",
+                "ECHIDNA_CI_TOKEN_SSM_PARAMETER",
+            ):
+                with self.subTest(ci_variable=ci_variable):
+                    self.assertIn(
+                        f"decode_b64_env {ci_variable} ''",
+                        variant,
+                    )
 
             rendered = rendered_by_mode["echidna-ci"]
             self.assertNotIn(malicious, rendered)
