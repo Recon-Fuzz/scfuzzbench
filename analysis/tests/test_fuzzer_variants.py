@@ -540,7 +540,9 @@ class VariantProvisioningContractTests(unittest.TestCase):
                     self.main,
                 )
         self.assertIn(
-            'local.instance_echidna_ci[each.key].run_id != ""', self.main
+            'local.echidna_ci_selected &&\n'
+            '    local.instance_echidna_ci[each.key].run_id != ""',
+            self.main,
         )
         self.assertIn(
             "length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled", self.main

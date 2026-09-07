@@ -22,6 +22,7 @@ class BleedingEdgeInfrastructureContractTests(unittest.TestCase):
         )
         self.assertIn(
             'each.value.fuzzer.base == "echidna" &&\n'
+            "    local.echidna_ci_selected &&\n"
             '    local.instance_echidna_ci[each.key].run_id != ""',
             main,
         )

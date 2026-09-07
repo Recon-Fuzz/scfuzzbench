@@ -863,6 +863,7 @@ resource "aws_instance" "fuzzer" {
   key_name                    = aws_key_pair.ssh.key_name
   iam_instance_profile = (
     each.value.fuzzer.base == "echidna" &&
+    local.echidna_ci_selected &&
     local.instance_echidna_ci[each.key].run_id != ""
     ? aws_iam_instance_profile.echidna_ci[0].name
     : aws_iam_instance_profile.fuzzer.name
