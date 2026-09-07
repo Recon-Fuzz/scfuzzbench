@@ -520,18 +520,28 @@ class VariantProvisioningContractTests(unittest.TestCase):
 
     def test_each_instance_resolves_its_own_echidna_build(self):
         self.assertIn(
-            "echidna_ci_run_id_b64            = "
             "base64encode(local.instance_echidna_ci[instance_key].run_id)",
             self.main,
         )
         self.assertIn(
-            "echidna_ci_commit_b64            = "
             "base64encode(local.instance_echidna_ci[instance_key].commit)",
             self.main,
         )
-        # Repository and token stay run-level: one SSM parameter in the role.
+        # Repository and token values stay run-level, but only CI-resolved
+        # instances receive them. Otherwise a release variant selects CI mode.
+        for value in (
+            "var.echidna_ci_repo",
+            "var.echidna_ci_token_ssm_parameter_name",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(
+                    'local.instance_echidna_ci[instance_key].run_id != "" '
+                    f'? {value} : ""',
+                    self.main,
+                )
         self.assertIn(
-            'base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")',
+            'local.echidna_ci_selected &&\n'
+            '    local.instance_echidna_ci[each.key].run_id != ""',
             self.main,
         )
         self.assertIn(

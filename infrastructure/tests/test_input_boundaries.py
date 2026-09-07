@@ -55,6 +55,178 @@ def incompressible_fuzzer_env() -> dict[str, str]:
     return result
 
 
+def extract_hcl_assignment(source: str, name: str) -> str:
+    matches = list(
+        re.finditer(
+            rf"(?m)^(?P<indent>[ \t]*){re.escape(name)}[ \t]*=[ \t]*",
+            source,
+        )
+    )
+    if len(matches) != 1:
+        raise AssertionError(f"expected exactly one HCL assignment for {name}")
+
+    match = matches[0]
+    remainder = source[match.end() :]
+    next_assignment = re.search(
+        rf"(?m)^{re.escape(match.group('indent'))}[A-Za-z_][A-Za-z0-9_]*[ \t]*=",
+        remainder,
+    )
+    if next_assignment is None:
+        raise AssertionError(f"could not find the assignment after {name}")
+    return remainder[: next_assignment.start()].strip()
+
+
+def echidna_resolution_payload(global_ci: bool) -> dict[str, object]:
+    payload = {
+        "fuzzer_variants": [
+            {
+                "key": "echidna-pr",
+                "base": "echidna",
+                "version": "",
+                "ci": {
+                    "run_id": "456",
+                    "artifact_name": "echidna-pr-linux",
+                    "artifact_sha256": "b" * 64,
+                    "commit": "b" * 40,
+                },
+            },
+            {
+                "key": "echidna-release-2-3-3",
+                "base": "echidna",
+                "version": "2.3.3",
+                "ci": None,
+            },
+        ],
+        "echidna_version": "2.3.2",
+        "medusa_version": "1.5.1",
+        "recon_version": "0.4.18",
+        "echidna_ci_repo": "",
+        "echidna_ci_run_id": "",
+        "echidna_ci_artifact_name": "",
+        "echidna_ci_artifact_sha256": "",
+        "echidna_ci_commit": "",
+        "echidna_ci_token_ssm_parameter_name": "",
+    }
+    if global_ci:
+        payload.update(
+            {
+                "echidna_ci_repo": "https://github.com/crytic/echidna",
+                "echidna_ci_run_id": "123",
+                "echidna_ci_artifact_name": "echidna-linux",
+                "echidna_ci_artifact_sha256": "a" * 64,
+                "echidna_ci_commit": "a" * 40,
+                "echidna_ci_token_ssm_parameter_name": (
+                    "/scfuzzbench/echidna-ci-token"
+                ),
+            }
+        )
+    return payload
+
+
+def write_echidna_resolution_fixture(
+    directory: Path, payload: dict[str, object]
+) -> None:
+    production = (INFRASTRUCTURE / "main.tf").read_text(encoding="utf-8")
+    local_names = (
+        "echidna_ci_inputs",
+        "echidna_ci_input_count",
+        "echidna_ci_enabled",
+        "variant_version_by_key",
+        "instance_tool_version",
+        "variant_ci_by_key",
+        "variant_release_keys",
+        "instance_echidna_ci",
+        "variant_ci_keys",
+        "selected_fuzzer_bases",
+        "echidna_ci_selected",
+    )
+    production_locals = "\n".join(
+        f"  {name} = "
+        + extract_hcl_assignment(production, name).replace(
+            "var.", "local.input."
+        )
+        for name in local_names
+    )
+    profile_expression = extract_hcl_assignment(
+        production, "iam_instance_profile"
+    ).replace(
+        "aws_iam_instance_profile.echidna_ci[0].name",
+        "local.echidna_ci_profiles[0]",
+    ).replace(
+        "aws_iam_instance_profile.fuzzer.name",
+        '"generic"',
+    ).replace(
+        "each.value",
+        "instance",
+    ).replace(
+        "each.key",
+        "instance_key",
+    )
+
+    (directory / "main.tf").write_text(
+        """
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+locals {
+  input = jsondecode(<<-JSON
+"""
+        + json.dumps(payload, sort_keys=True)
+        + """
+  JSON
+  )
+  fuzzer_definitions = concat(
+    [{ key = "echidna", base = "echidna" }],
+    [for variant in local.input.fuzzer_variants : {
+      key  = variant.key
+      base = variant.base
+    }]
+  )
+  instances = [
+    for fuzzer in local.fuzzer_definitions : {
+      key       = "${fuzzer.key}-0"
+      fuzzer    = fuzzer
+      run_index = 0
+    }
+  ]
+  instance_map            = { for instance in local.instances : instance.key => instance }
+  foundry_release_version = "v1.7.1"
+"""
+        + production_locals
+        + """
+  echidna_ci_profiles = local.echidna_ci_selected ? ["ci"] : []
+  profile_by_key = {
+    for instance_key, instance in local.instance_map : instance_key => """
+        + profile_expression
+        + """
+  }
+}
+
+resource "terraform_data" "validation" {
+  input = local.profile_by_key
+  lifecycle {
+    precondition {
+      condition     = length(local.variant_ci_keys) == 0 || local.echidna_ci_enabled
+      error_message = "Fuzzer variant CI builds require the run-level Echidna CI inputs."
+    }
+  }
+}
+
+output "resolution" {
+  value = {
+    for key, instance in local.instance_map : key => {
+      version = local.instance_tool_version[key]["echidna"]
+      ci      = local.instance_echidna_ci[key]
+      profile = local.profile_by_key[key]
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+
 @unittest.skipUnless(shutil.which(TERRAFORM), "terraform is not installed")
 class TerraformInputBoundaryTests(unittest.TestCase):
     def test_benchmark_outputs_declassify_only_public_metadata(self):
@@ -417,6 +589,67 @@ locals {
             self.assertNotEqual(0, uppercase_commit.returncode)
             self.assertIn("lowercase", uppercase_commit.stderr)
 
+    def test_production_echidna_variant_resolution_matrix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            write_echidna_resolution_fixture(
+                fixture, echidna_resolution_payload(global_ci=True)
+            )
+
+            run_terraform(fixture, "init", "-backend=false", "-input=false", check=True)
+            run_terraform(
+                fixture,
+                "apply",
+                "-auto-approve",
+                "-input=false",
+                check=True,
+            )
+            resolution = json.loads(
+                run_terraform(
+                    fixture, "output", "-json", "resolution", check=True
+                ).stdout
+            )
+
+            self.assertEqual("ci", resolution["echidna-0"]["profile"])
+            self.assertEqual("123", resolution["echidna-0"]["ci"]["run_id"])
+            self.assertEqual("ci", resolution["echidna-pr-0"]["profile"])
+            self.assertEqual("456", resolution["echidna-pr-0"]["ci"]["run_id"])
+            release = resolution["echidna-release-2-3-3-0"]
+            self.assertEqual("2.3.3", release["version"])
+            self.assertEqual("generic", release["profile"])
+            self.assertEqual(
+                {
+                    "run_id": "",
+                    "artifact_name": "",
+                    "artifact_sha256": "",
+                    "commit": "",
+                },
+                release["ci"],
+            )
+
+    def test_variant_ci_without_run_level_inputs_uses_controlled_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            write_echidna_resolution_fixture(
+                fixture, echidna_resolution_payload(global_ci=False)
+            )
+
+            run_terraform(fixture, "init", "-backend=false", "-input=false", check=True)
+            result = run_terraform(
+                fixture,
+                "plan",
+                "-input=false",
+                "-lock=false",
+                "-refresh=false",
+            )
+            diagnostics = result.stdout + result.stderr
+            self.assertNotEqual(0, result.returncode, diagnostics)
+            self.assertIn(
+                "Fuzzer variant CI builds require the run-level Echidna CI inputs",
+                diagnostics,
+            )
+            self.assertNotIn("Invalid index", diagnostics)
+
     def test_all_modes_fit_ec2_limit_and_every_scalar_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
@@ -519,6 +752,25 @@ locals {
                 + base64.b64encode(b"echidna").decode(),
                 variant,
             )
+            self.assertIn(
+                "decode_b64_env ECHIDNA_VERSION '"
+                + base64.b64encode(b"2.2.6").decode()
+                + "'",
+                variant,
+            )
+            for ci_variable in (
+                "ECHIDNA_CI_REPO",
+                "ECHIDNA_CI_RUN_ID",
+                "ECHIDNA_CI_ARTIFACT_NAME",
+                "ECHIDNA_CI_ARTIFACT_SHA256",
+                "ECHIDNA_CI_COMMIT",
+                "ECHIDNA_CI_TOKEN_SSM_PARAMETER",
+            ):
+                with self.subTest(ci_variable=ci_variable):
+                    self.assertIn(
+                        f"decode_b64_env {ci_variable} ''",
+                        variant,
+                    )
 
             rendered = rendered_by_mode["echidna-ci"]
             self.assertNotIn(malicious, rendered)

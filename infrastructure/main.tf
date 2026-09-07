@@ -311,7 +311,8 @@ locals {
   }
 
   # A variant may pin its own Echidna CI build. Repository and token parameter
-  # stay run-level, so the instance role still reads one SSM parameter.
+  # values stay run-level, but are injected only into instances resolved to CI
+  # mode so release variants do not accidentally select the CI installer.
   variant_ci_by_key = {
     for variant in var.fuzzer_variants :
     variant.key => variant.ci if variant.ci != null
@@ -411,13 +412,15 @@ locals {
         foundry_git_repo_b64             = base64encode(var.foundry_git_repo)
         foundry_git_ref_b64              = base64encode(var.foundry_git_ref)
         echidna_version_b64              = base64encode(local.instance_tool_version[instance_key]["echidna"])
-        echidna_ci_repo_b64              = base64encode(instance.fuzzer.base == "echidna" ? var.echidna_ci_repo : "")
-        echidna_ci_run_id_b64            = base64encode(local.instance_echidna_ci[instance_key].run_id)
-        echidna_ci_artifact_name_b64     = base64encode(local.instance_echidna_ci[instance_key].artifact_name)
-        echidna_ci_artifact_sha256_b64   = base64encode(local.instance_echidna_ci[instance_key].artifact_sha256)
-        echidna_ci_commit_b64            = base64encode(local.instance_echidna_ci[instance_key].commit)
+        echidna_ci_repo_b64 = base64encode(
+          local.instance_echidna_ci[instance_key].run_id != "" ? var.echidna_ci_repo : ""
+        )
+        echidna_ci_run_id_b64          = base64encode(local.instance_echidna_ci[instance_key].run_id)
+        echidna_ci_artifact_name_b64   = base64encode(local.instance_echidna_ci[instance_key].artifact_name)
+        echidna_ci_artifact_sha256_b64 = base64encode(local.instance_echidna_ci[instance_key].artifact_sha256)
+        echidna_ci_commit_b64          = base64encode(local.instance_echidna_ci[instance_key].commit)
         echidna_ci_token_ssm_parameter_name_b64 = base64encode(
-          instance.fuzzer.base == "echidna" ? var.echidna_ci_token_ssm_parameter_name : ""
+          local.instance_echidna_ci[instance_key].run_id != "" ? var.echidna_ci_token_ssm_parameter_name : ""
         )
         medusa_version_b64 = base64encode(local.instance_tool_version[instance_key]["medusa"])
         medusa_git_repo_b64 = base64encode(
@@ -859,7 +862,9 @@ resource "aws_instance" "fuzzer" {
   vpc_security_group_ids      = [aws_security_group.ssh.id]
   key_name                    = aws_key_pair.ssh.key_name
   iam_instance_profile = (
-    each.value.fuzzer.base == "echidna" && local.echidna_ci_selected
+    each.value.fuzzer.base == "echidna" &&
+    local.echidna_ci_selected &&
+    local.instance_echidna_ci[each.key].run_id != ""
     ? aws_iam_instance_profile.echidna_ci[0].name
     : aws_iam_instance_profile.fuzzer.name
   )

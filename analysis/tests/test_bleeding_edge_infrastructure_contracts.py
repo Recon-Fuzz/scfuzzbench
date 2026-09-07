@@ -20,7 +20,12 @@ class BleedingEdgeInfrastructureContractTests(unittest.TestCase):
             "compact([local.git_token_ssm_parameter_arn, local.echidna_ci_token_ssm_parameter_arn])",
             main,
         )
-        self.assertIn('each.value.fuzzer.base == "echidna" && local.echidna_ci_selected', main)
+        self.assertIn(
+            'each.value.fuzzer.base == "echidna" &&\n'
+            "    local.echidna_ci_selected &&\n"
+            '    local.instance_echidna_ci[each.key].run_id != ""',
+            main,
+        )
 
     def test_source_extractors_and_values_are_scoped_to_their_fuzzer(self):
         main = (REPO_ROOT / "infrastructure" / "main.tf").read_text(encoding="utf-8")
@@ -28,12 +33,20 @@ class BleedingEdgeInfrastructureContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        # Scoping follows the base fuzzer so a variant of it (a second
-        # revision run under its own key) installs the same way.
+        # CI mode is resolved per instance. A release variant of Echidna must
+        # not inherit the run-level repository or token and select CI mode.
         self.assertIn(
-            'base64encode(instance.fuzzer.base == "echidna" ? '
-            'var.echidna_ci_repo : "")',
+            'local.instance_echidna_ci[instance_key].run_id != "" '
+            '? var.echidna_ci_repo : ""',
             main,
+        )
+        self.assertIn(
+            'local.instance_echidna_ci[instance_key].run_id != "" '
+            '? var.echidna_ci_token_ssm_parameter_name : ""',
+            main,
+        )
+        self.assertNotIn(
+            'instance.fuzzer.base == "echidna" ? var.echidna_ci_repo', main
         )
         # Medusa source inputs are resolved per instance so a variant that
         # pins a release opts out of the run-level source build.

@@ -64,6 +64,7 @@ locals {
     echidna-stable = {
       fuzzer_key               = "echidna"
       fuzzer_script_key        = "echidna"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -79,6 +80,7 @@ locals {
     echidna-ci = {
       fuzzer_key               = "echidna"
       fuzzer_script_key        = "echidna"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = "https://github.com/crytic/echidna"
       echidna_ci_run_id        = "123456789"
       echidna_ci_artifact_name = "echidna-linux-x86_64"
@@ -94,6 +96,7 @@ locals {
     medusa-stable = {
       fuzzer_key               = "medusa"
       fuzzer_script_key        = "medusa"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -109,6 +112,7 @@ locals {
     medusa-source = {
       fuzzer_key               = "medusa"
       fuzzer_script_key        = "medusa"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -124,6 +128,7 @@ locals {
     foundry = {
       fuzzer_key               = "foundry"
       fuzzer_script_key        = "foundry"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -139,6 +144,7 @@ locals {
     recon = {
       fuzzer_key               = "recon-fuzzer"
       fuzzer_script_key        = "recon-fuzzer"
+      echidna_version          = "2.3.2"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -154,6 +160,7 @@ locals {
     echidna-variant = {
       fuzzer_key               = "echidna-2-2-6"
       fuzzer_script_key        = "echidna"
+      echidna_version          = "2.2.6"
       echidna_ci_repo          = ""
       echidna_ci_run_id        = ""
       echidna_ci_artifact_name = ""
@@ -194,7 +201,7 @@ locals {
         foundry_version_b64                     = base64encode("v1.0.0")
         foundry_git_repo_b64                    = base64encode("https://github.com/foundry-rs/foundry")
         foundry_git_ref_b64                     = base64encode(local.commit)
-        echidna_version_b64                     = base64encode("2.3.2")
+        echidna_version_b64                     = base64encode(mode.echidna_version)
         echidna_ci_repo_b64                     = base64encode(mode.echidna_ci_repo)
         echidna_ci_run_id_b64                   = base64encode(mode.echidna_ci_run_id)
         echidna_ci_artifact_name_b64            = base64encode(mode.echidna_ci_artifact_name)
